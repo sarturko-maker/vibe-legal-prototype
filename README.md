@@ -58,3 +58,10 @@ RUN Click the "Run" button in the Script Lab ribbon.
 You will need a Google Gemini API Key (free tier available at aistudio.google.com).
 
 Select text in your document and click "Redline".
+
+## Third-Party Licenses
+
+This project uses the following open-source software:
+
+* **diff-match-patch**: Copyright (c) 2018 The diff-match-patch Authors. Licensed under Apache 2.0.
+* **React**: Copyright (c) Meta Platforms, Inc. Licensed under MIT.
