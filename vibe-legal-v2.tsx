@@ -1,12 +1,12 @@
 // ==========================================
-// VIBE LEGAL v2.0 (ENTERPRISE RE-FLOW)
+// VIBE LEGAL v2.0 (RE-FLOW)
 // ==========================================
 declare var diff_match_patch: any;
 declare var React: any;
 declare var ReactDOM: any;
 
 // ==========================================
-// 1. ENTERPRISE OXML ENGINE (Multi-Paragraph)
+// 1. OXML ENGINE (Multi-Paragraph)
 // ==========================================
 
 function calculateRedline(original: string, modified: string): Array<{ op: number; text: string }> {
