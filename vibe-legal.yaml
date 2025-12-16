@@ -1,5 +1,5 @@
-name: Vibe Legal MVP 1.0
-description: AI-Powered Contract Redlining Engine - Production Ready
+name: Vibe Legal Alpha 0.1
+description: AI-Powered Contract Redlining
 host: WORD
 api_set: {}
 script:
@@ -7,8 +7,7 @@ script:
     /**
      * VIBE LEGAL - AI-Powered Contract Redlining Engine
      * 
-     * A client-side TypeScript engine for Microsoft Word that uses LLMs
-     * to surgically redline documents while preserving OXML structure.
+     * MVP 1.1 Enhanced - Structured Reasoning + Claude (Anthropic) API Support
      * 
      * https://github.com/sarturko-maker/vibe-legal
      * GNU General Public License
@@ -17,6 +16,40 @@ script:
     declare var diff_match_patch: any;
     declare var React: any;
     declare var ReactDOM: any;
+
+    // ==========================================
+    // PROVIDER CONFIGURATION
+    // ==========================================
+
+    type AIProvider = "gemini" | "claude";
+
+    interface ProviderConfig {
+        provider: AIProvider;
+        geminiApiKey: string;
+        claudeApiKey: string;
+        geminiModel: string;
+        claudeModel: string;
+    }
+
+    let providerConfig: ProviderConfig = {
+        provider: "gemini",
+        geminiApiKey: "",
+        claudeApiKey: "",
+        geminiModel: "gemini-2.0-flash-exp",
+        claudeModel: "claude-sonnet-4-20250514"
+    };
+
+    function getCurrentApiKey(): string {
+        return providerConfig.provider === "gemini" 
+            ? providerConfig.geminiApiKey 
+            : providerConfig.claudeApiKey;
+    }
+
+    function getCurrentModel(): string {
+        return providerConfig.provider === "gemini"
+            ? providerConfig.geminiModel
+            : providerConfig.claudeModel;
+    }
 
     // ==========================================
     // TRACK CHANGES AUTHOR SYSTEM
@@ -58,7 +91,6 @@ script:
             const detected = properties.lastAuthor?.trim() || properties.author?.trim() || null;
             
             if (detected) {
-                console.log(`[Vibe] Detected document author: ${detected}`);
                 authorSettings.detectedAuthor = detected;
             }
             
@@ -73,7 +105,6 @@ script:
     // CONTEXT CACHING SYSTEM - Configuration
     // ==========================================
 
-    // Cache Configuration
     const CACHE_CONFIG = {
         maxChangelogEntries: 10,
         maxChangelogChars: 5000,
@@ -81,7 +112,6 @@ script:
         minCacheChars: 10000
     };
 
-    // Cache State Interfaces
     interface ChangeEntry {
         type: "INSERT" | "MODIFY";
         description: string;
@@ -95,15 +125,12 @@ script:
         changelog: ChangeEntry[];
     }
 
-    // Global cache state
     let cacheState: CacheState = {
         cacheId: null,
         createdAt: null,
         changelog: []
     };
 
-
-    // Removes markdown formatting from AI responses
     function stripMarkdownFormatting(text: string): string {
         if (!text) return "";
         return text
@@ -149,7 +176,6 @@ script:
             return { oxml, hasChanges: false };
         }
 
-        // Check for tables
         const tables = xmlDoc.getElementsByTagName("w:tbl");
         const hasTables = tables.length > 0;
 
@@ -160,7 +186,6 @@ script:
         }
     }
 
-    // SURGICAL MODE (for tables - preserves structure)
     function applySurgicalMode(xmlDoc, originalText, modifiedText, serializer) {
         let fullText = "";
         const textSpans: TextSpan[] = [];
@@ -274,19 +299,15 @@ script:
     }
 
     function processInsert(xmlDoc, textSpans, pos, text, processedSpans) {
-        // Try to find the span at the insertion position
         let targetSpan = textSpans.find(s => pos >= s.charStart && pos < s.charEnd);
 
-        // If not found, try the span that ends at this position
         if (!targetSpan && pos > 0) {
             targetSpan = textSpans.find(s => pos === s.charEnd);
         }
 
-        // If still not found, try the span just before
         if (!targetSpan && pos > 0) {
             targetSpan = textSpans.find(s => s.charEnd <= pos);
             if (!targetSpan && textSpans.length > 0) {
-                // Find the closest span before this position
                 const before = textSpans.filter(s => s.charEnd <= pos);
                 if (before.length > 0) {
                     targetSpan = before[before.length - 1];
@@ -294,13 +315,11 @@ script:
             }
         }
 
-        // Last resort: use the last span
         if (!targetSpan && textSpans.length > 0) {
             targetSpan = textSpans[textSpans.length - 1];
         }
 
         if (targetSpan) {
-            // CRITICAL: Ensure we inherit the rPr for formatting preservation
             const rPr = targetSpan.rPr;
             const insRun = createTextRun(xmlDoc, text, rPr, false);
             const insWrapper = createTrackChange(xmlDoc, 'ins', insRun);
@@ -311,13 +330,11 @@ script:
 
     // RECONSTRUCTION MODE (Restored from Legacy Vibe 3.3 Stable)
     function applyReconstructionMode(xmlDoc, originalText, modifiedText, serializer) {
-        // 1. EXTRACT PARAGRAPHS
         const body = xmlDoc.getElementsByTagName("w:body")[0] || xmlDoc.documentElement;
         const paragraphs = Array.from(xmlDoc.getElementsByTagName("w:p"));
 
         if (paragraphs.length === 0) return { oxml: serializer.serializeToString(xmlDoc), hasChanges: false };
 
-        // 2. BUILD CONTEXT & MAPS
         let originalFullText = "";
         const propertyMap = [];
         const paragraphMap = [];
@@ -351,7 +368,6 @@ script:
                                 originalFullText += textContent;
                             }
                         } else if (["w:drawing", "w:pict", "w:object", "w:fldChar", "w:instrText"].includes(rc.nodeName)) {
-                            // SENTINEL LOGIC
                             const rcElement = rc;
                             const txbxContent = rcElement.getElementsByTagName("w:txbxContent")[0];
                             const hasTextBox = rc.nodeName === "w:pict" && !!txbxContent;
@@ -371,7 +387,6 @@ script:
                                 propertyMap.push({ start: originalFullText.length - 1, end: originalFullText.length, rPr: rPr });
                             }
                         } else if (rc.nodeName === "w:footnoteReference" || rc.nodeName === "w:endnoteReference") {
-                            // REFERENCE LOGIC
                             const ref = rc;
                             const id = ref.getAttribute("w:id");
                             if (id) {
@@ -430,22 +445,17 @@ script:
             });
         });
 
-        // 3. SANITIZE & PROCESS INPUT
-        // Note: modifiedText passed in is already sanitized by the wrapper, but legacy logic re-sanitizes.
-        // We'll trust the wrapper's sanitization but apply the token replacement.
-        let processedModifiedText = modifiedText || ""; // Fix: Ensure not null
+        let processedModifiedText = modifiedText || "";
 
         tokenToCharMap.forEach((char, tokenString) => {
             const escapedToken = tokenString.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, "\\$&");
             processedModifiedText = processedModifiedText.replace(new RegExp(escapedToken, "g"), char);
         });
 
-        // 4. DIFF CALCULATION
         const dmp = new diff_match_patch();
         const diffs = dmp.diff_main(originalFullText, processedModifiedText);
         dmp.diff_cleanupSemantic(diffs);
 
-        // 5. RECONSTRUCTION
         const containerFragments = new Map();
         uniqueContainers.forEach((c) => containerFragments.set(c, xmlDoc.createDocumentFragment()));
         if (!containerFragments.has(body)) containerFragments.set(body, xmlDoc.createDocumentFragment());
@@ -662,19 +672,16 @@ script:
         const parser = new DOMParser();
         const xmlDoc = parser.parseFromString(oxmlResult.value, "text/xml");
         
-        // Remove all <w:del> elements (deleted text)
         const deletions = xmlDoc.getElementsByTagName("w:del");
         while (deletions.length > 0) {
             deletions[0].parentNode?.removeChild(deletions[0]);
         }
         
-        // Remove w:delText elements
         const delTexts = xmlDoc.getElementsByTagName("w:delText");
         while (delTexts.length > 0) {
             delTexts[0].parentNode?.removeChild(delTexts[0]);
         }
         
-        // Unwrap <w:ins> elements (keep content)
         const insertions = xmlDoc.getElementsByTagName("w:ins");
         while (insertions.length > 0) {
             const ins = insertions[0];
@@ -685,7 +692,6 @@ script:
             parent?.removeChild(ins);
         }
         
-        // Extract text
         const paragraphs = xmlDoc.getElementsByTagName("w:p");
         let acceptedText = "";
         
@@ -737,25 +743,17 @@ script:
         if (!response.ok) {
             const error = await response.json();
             const errorMsg = error.error?.message || "Failed to create cache";
-            
-            // Log the actual error for debugging
             console.error("[Vibe] Cache creation failed:", response.status, errorMsg);
-            
-            // Check if error specifically indicates model doesn't support caching
-            // Be precise - only match clear "model doesn't support" messages
             const lowerMsg = errorMsg.toLowerCase();
             if ((lowerMsg.includes("model") && lowerMsg.includes("not support")) ||
                 lowerMsg.includes("does not support caching") ||
                 lowerMsg.includes("cachedcontent is not supported")) {
                 throw new Error("ModelDoesNotSupportCaching");
             }
-            
-            // For other errors, throw with the actual message
             throw new Error(errorMsg);
         }
         
         const data = await response.json();
-        console.log("[Vibe] Context cache created:", data.name);
         return data.name;
     }
 
@@ -765,7 +763,6 @@ script:
         try {
             const url = `https://generativelanguage.googleapis.com/v1beta/${cacheId}?key=${apiKey}`;
             await fetch(url, { method: "DELETE" });
-            console.log("[Vibe] Context cache deleted:", cacheId);
         } catch (e) {
             console.warn("[Vibe] Failed to delete cache:", e);
         }
@@ -777,21 +774,21 @@ script:
     }
 
     async function ensureCache(apiKey: string, model: string, fullDocumentText: string): Promise<{ cacheId: string | null; error?: string }> {
-        // Return existing valid cache
+        // Claude doesn't support caching - always return null
+        if (providerConfig.provider === "claude") {
+            return { cacheId: null };
+        }
+        
         if (cacheState.cacheId && !isCacheExpired()) {
             return { cacheId: cacheState.cacheId };
         }
         
-        // Check if document is large enough for caching (Gemini requires ~2048 tokens minimum)
         if (fullDocumentText.length < CACHE_CONFIG.minCacheChars) {
-            console.log(`[Vibe] Document too small for caching (${fullDocumentText.length} chars < ${CACHE_CONFIG.minCacheChars}), using direct mode`);
             cacheState = { cacheId: null, createdAt: null, changelog: [] };
-            return { cacheId: null };  // Silent - no error message, just skip caching
+            return { cacheId: null };
         }
         
-        // Create new cache
         try {
-            console.log("[Vibe] Creating context cache...");
             const cacheId = await createGeminiCache(apiKey, model, fullDocumentText);
             cacheState = {
                 cacheId,
@@ -802,21 +799,18 @@ script:
         } catch (e) {
             const errorMsg = (e as Error).message;
             
-            // Specific handling for models that don't support caching
             if (errorMsg === "ModelDoesNotSupportCaching") {
                 console.warn("[Vibe] Model does not support caching, using direct mode");
                 cacheState = { cacheId: null, createdAt: null, changelog: [] };
                 return { cacheId: null, error: "This model doesn't support caching. Using Direct Mode." };
             }
             
-            // Check for "too small" error and silently skip
             if (errorMsg.toLowerCase().includes("too small")) {
                 console.warn("[Vibe] Document too small for caching, using direct mode");
                 cacheState = { cacheId: null, createdAt: null, changelog: [] };
                 return { cacheId: null };
             }
             
-            // Generic cache failure - show actual error
             console.warn("[Vibe] Context caching unavailable:", errorMsg);
             cacheState = { cacheId: null, createdAt: null, changelog: [] };
             return { cacheId: null, error: `Cache failed: ${errorMsg}. Using Direct Mode.` };
@@ -827,13 +821,11 @@ script:
         const entry: ChangeEntry = {
             type,
             description,
-            // Store up to 2000 chars of actual content for question answering
             content: content ? content.substring(0, 2000) : undefined,
             timestamp: new Date()
         };
         
         cacheState.changelog.push(entry);
-        console.log(`[Vibe] Logged change: ${type} - ${description.substring(0, 50)}...`);
     }
 
     function shouldRefreshCache(): boolean {
@@ -850,21 +842,22 @@ script:
     }
 
     async function refreshCache(apiKey: string, model: string, fullDocumentText: string): Promise<{ success: boolean; error?: string }> {
-        console.log("[Vibe] Refreshing context cache...");
+        // Claude doesn't support caching
+        if (providerConfig.provider === "claude") {
+            cacheState = { cacheId: null, createdAt: null, changelog: [] };
+            return { success: true };
+        }
         
-        // Delete old cache
+        
         if (cacheState.cacheId) {
             await deleteGeminiCache(apiKey, cacheState.cacheId);
         }
         
-        // Check if document is large enough for caching
         if (fullDocumentText.length < CACHE_CONFIG.minCacheChars) {
-            console.log(`[Vibe] Document too small for caching (${fullDocumentText.length} chars), using direct mode`);
             cacheState = { cacheId: null, createdAt: null, changelog: [] };
-            return { success: true };  // Not an error - just skip caching
+            return { success: true };
         }
         
-        // Create new cache
         try {
             const cacheId = await createGeminiCache(apiKey, model, fullDocumentText);
             cacheState = {
@@ -872,7 +865,6 @@ script:
                 createdAt: new Date(),
                 changelog: []
             };
-            console.log("[Vibe] Context cache refreshed successfully");
             return { success: true };
         } catch (e) {
             const errorMsg = (e as Error).message;
@@ -883,14 +875,12 @@ script:
                 return { success: false, error: "This model doesn't support caching. Using Direct Mode." };
             }
             
-            // Check for "too small" error and silently skip
             if (errorMsg.toLowerCase().includes("too small")) {
                 console.warn("[Vibe] Document too small for caching, using direct mode");
                 cacheState = { cacheId: null, createdAt: null, changelog: [] };
                 return { success: true };
             }
             
-            // Show actual error
             console.warn("[Vibe] Cache refresh failed:", errorMsg);
             cacheState = { cacheId: null, createdAt: null, changelog: [] };
             return { success: false, error: `Cache failed: ${errorMsg}. Using Direct Mode.` };
@@ -911,6 +901,7 @@ script:
     }
 
     function getCacheStatus(): "loaded" | "loading" | "direct" {
+        if (providerConfig.provider === "claude") return "direct";
         if (cacheState.cacheId && !isCacheExpired()) return "loaded";
         if (cacheState.cacheId === null && cacheState.createdAt === null) return "direct";
         return "loading";
@@ -921,30 +912,743 @@ script:
     // ==========================================
 
     function isQuestionIntent(prompt: string): boolean {
+        const p = prompt.trim();
+        
+        // FIRST: Check if it's clearly an ACTION request (takes priority over question patterns)
+        // This prevents "Can you change..." from being classified as a question
+        const actionPatterns = [
+            // "Can you [action verb]..." patterns
+            /^can you (change|modify|update|edit|fix|correct|amend|revise)/i,
+            /^can you (add|insert|include|create|draft|write)/i,
+            /^can you (delete|remove|strike|redline)/i,
+            /^can you (make|convert|turn|transform)/i,
+            /^can you (strengthen|weaken|soften|clarify)/i,
+            
+            // "Please [action]..." patterns
+            /^(please\s+)?(change|modify|update|edit|fix|correct|amend|revise)\s/i,
+            /^(please\s+)?(add|insert|include|create|draft|write)\s/i,
+            /^(please\s+)?(delete|remove|strike)\s/i,
+            /^(please\s+)?(make|convert|turn|transform)\s/i,
+            
+            // Direct action commands
+            /^(change|modify|update|add|insert|delete|remove|make|set|put)\s/i,
+            
+            // Specific value changes (strong indicator of action)
+            /\b(change|set|update|modify)\b.*\b(to|at)\s+(ny|new york|california|texas|delaware)/i,
+            /\b(change|set|update|modify)\b.*\b(to|at)\s+\$[\d,]+/i,
+            /\b(change|set|update|modify)\b.*\b(to|at)\s+\d+\s*(days?|years?|months?|weeks?)/i,
+            
+            // "Make this..." patterns (actions, not questions)
+            /^make (this|it|the)/i,
+        ];
+        
+        // If any action pattern matches, it's NOT a question
+        if (actionPatterns.some(pattern => pattern.test(p))) {
+            return false;
+        }
+        
+        // THEN: Check question patterns (only if not an action)
         const questionPatterns = [
-            /^(is|are|does|do|can|could|would|should|will|has|have|was|were)\s/i,
+            // Interrogative words
             /^(what|who|where|when|why|how|which)\s/i,
+            
+            // Ends with question mark
             /\?$/,
-            /^(tell me|explain|describe|summarize|analyze|review|check|assess|evaluate|compare)/i,
-            /^(is this|is it|are there|does this|does it)/i,
-            /(balanced|fair|reasonable|standard|typical|unusual|risky|favorable|unfavorable|one-way|mutual|reciprocal)/i,
-            /(compliant|enforceable|valid|binding)/i,
-            /^(find|show|list|identify|highlight|point out)/i,
-            /(what are the|what is the|who is|who are)/i
+            
+            // Explanation requests
+            /^(tell me|explain|describe|summarize|analyze|review|assess|evaluate|compare)/i,
+            /^can you (explain|tell|describe|summarize|analyze|review|check|assess)/i,
+            
+            // "Is/Are/Does..." questions (but NOT "is this mutual" style requests)
+            /^(is this|is it|are there|does this|does it)\s.*(balanced|fair|reasonable|risky|compliant|enforceable|valid)/i,
+            
+            // Assessment language
+            /(balanced|fair|reasonable|standard|typical|unusual|risky|favorable|unfavorable)\?/i,
+            /(compliant|enforceable|valid|binding)\?/i,
+            
+            // List/Find requests
+            /^(find|show|list|identify|highlight|point out)\s.*(issues?|problems?|clauses?|terms?)/i,
+            
+            // "What are/is the..." patterns
+            /(what are the|what is the|who is|who are)/i,
         ];
         
-        const changePatterns = [
-            /^(add|insert|create|draft|write|include)/i,
-            /^(change|modify|update|amend|revise|edit|fix|correct)/i,
-            /^(delete|remove|strike|redline)/i,
-            /^(make it|make this|convert|turn this)/i,
-            /^(strengthen|weaken|soften|clarify)/i
+        return questionPatterns.some(pattern => pattern.test(p));
+    }
+
+    // ==========================================
+    // HOLISTIC TRANSFORMATION DETECTION
+    // ==========================================
+
+    /**
+     * Detects if a prompt requires holistic document transformation.
+     * Holistic mode sends the entire document for rewriting to ensure
+     * consistent terminology and coherent changes across all sections.
+     */
+    function isHolisticTransformation(prompt: string): boolean {
+        const p = prompt.toLowerCase().trim();
+        
+        // Patterns that indicate holistic transformation needed
+        const holisticPatterns = [
+            // Mutual/reciprocal conversions
+            /\b(make|convert|change|turn).*(mutual|reciprocal|two-way|bilateral)/i,
+            /\b(mutual|reciprocal|two-way|bilateral)\b.*\b(nda|agreement|contract)\b/i,
+            
+            // Party/role transformations
+            /\b(flip|swap|switch|reverse).*(parties|roles|sides)/i,
+            /\b(change|convert).*(from|to).*(one-way|two-way)/i,
+            /\b(disclos(er|ing)|recipient).*(to|into|become)/i,
+            
+            // Document type conversions
+            /\b(convert|change|turn|transform).*(this|document|agreement).*(to|into|as)/i,
+            /\b(restructure|rewrite|recast|remake)\b/i,
+            
+            // Fundamental nature changes
+            /\b(make this|turn this into|convert this to)\s+\w+\s+(agreement|contract|nda)/i,
+            /\b(change|modify)\s+the\s+(nature|type|structure)\b/i
         ];
         
-        const looksLikeQuestion = questionPatterns.some(p => p.test(prompt.trim()));
-        const looksLikeChange = changePatterns.some(p => p.test(prompt.trim()));
+        // Patterns that indicate surgical/targeted changes (NOT holistic)
+        const surgicalPatterns = [
+            /^(add|insert|include|create|draft)\s/i,
+            /\b(clause|section|paragraph|provision)\s*(about|for|regarding)/i,
+            /\b(liability|indemnity|cap|limit)\s*(to|at)\s*\$?\d/i,
+            /^(delete|remove|strike)\s/i,
+            /\b(section|paragraph|clause)\s*\d/i,
+            /\b(change|modify|update)\s+(the|section|paragraph).*\s+(to|from)\s+\$/i
+        ];
         
-        return looksLikeQuestion && !looksLikeChange;
+        const isHolistic = holisticPatterns.some(pattern => pattern.test(p));
+        const isSurgical = surgicalPatterns.some(pattern => pattern.test(p));
+        
+        // Only use holistic mode if it matches holistic patterns and doesn't match surgical patterns
+        const result = isHolistic && !isSurgical;
+        
+        if (result) {
+        }
+        
+        return result;
+    }
+
+    // ==========================================
+    // CONVERSATION CONTEXT SYSTEM
+    // ==========================================
+
+    interface ContextAnalysis {
+        includeHistory: boolean;
+        relevantEntries: ChangeEntry[];
+        referenceType: "none" | "explicit" | "implicit";
+    }
+
+    function analyzePromptForReferences(prompt: string, changelog: ChangeEntry[]): ContextAnalysis {
+        const explicitPatterns = [
+            /same (thing|way|approach|treatment|wording|language)/i,
+            /like (before|we did|the previous|earlier|last time)/i,
+            /similar(ly)? to (what|how)/i,
+            /do that (to|for|with)/i,
+            /apply (that|this|the same) to/i,
+            /repeat (that|this) for/i,
+            /as we did (with|for|to)/i,
+            /(also|too|as well)$/i
+        ];
+        
+        const implicitPatterns = [
+            /^(and|also|now)\s/i,
+            /the other/i,
+            /remaining/i,
+            /rest of/i
+        ];
+        
+        const hasExplicitReference = explicitPatterns.some(p => p.test(prompt));
+        const hasImplicitReference = implicitPatterns.some(p => p.test(prompt));
+        
+        if (hasExplicitReference) {
+            return {
+                includeHistory: true,
+                relevantEntries: changelog.slice(-3),
+                referenceType: "explicit"
+            };
+        }
+        
+        if (hasImplicitReference && changelog.length > 0) {
+            return {
+                includeHistory: true,
+                relevantEntries: changelog.slice(-1),
+                referenceType: "implicit"
+            };
+        }
+        
+        return {
+            includeHistory: false,
+            relevantEntries: [],
+            referenceType: "none"
+        };
+    }
+
+    function buildContextSection(changelog: ChangeEntry[], analysis: ContextAnalysis): string {
+        let completedSection = "";
+        if (changelog.length > 0) {
+            const completedList = changelog.map((c, i) => 
+                `[${i + 1}] ${c.type}: ${c.description}`
+            ).join("\n");
+            
+            completedSection = "COMPLETED CHANGES THIS SESSION:\n" + completedList + "\n";
+        }
+        
+        let referenceSection = "";
+        if (analysis.includeHistory && analysis.relevantEntries.length > 0) {
+            if (analysis.referenceType === "explicit") {
+                const details = analysis.relevantEntries.map(e => {
+                    const contentPreview = e.content ? " Content: \"" + e.content.substring(0, 150) + "...\"" : "";
+                    return "- " + e.type + " " + e.description + contentPreview;
+                }).join("\n");
+                
+                referenceSection = "\nUSER IS REFERENCING PREVIOUS WORK. Relevant changes:\n" + details + "\n\nApply a similar approach to the current request.";
+            } else {
+                referenceSection = "\nPOSSIBLE REFERENCE to recent change: " + analysis.relevantEntries[0].description + "\nOnly apply if the user's request clearly relates to this.";
+            }
+        }
+        
+        const independenceNote = "\nIMPORTANT: Unless the user explicitly says \"same\", \"like before\", or similar:\n- Treat this request as INDEPENDENT\n- Do NOT apply previous $ amounts, caps, or specific wording to new clauses\n- Do NOT assume connections between different sections\n- The changelog shows what's DONE, not patterns to repeat";
+
+        return completedSection + referenceSection + independenceNote;
+    }
+
+    // ==========================================
+    // V10.0 DOCUMENT SNAPSHOT (AI-Driven Analysis)
+    // ==========================================
+
+    interface ParagraphSnapshot {
+        id: number;
+        text: string;
+        styleId: string;
+        token: string;
+        fmt: {
+            bold: boolean;
+            allCaps: boolean;
+            alignment: string;
+        };
+        list: {
+            isListItem: boolean;
+            level: number;
+        };
+    }
+
+    interface DocumentSnapshot {
+        paragraphs: ParagraphSnapshot[];
+        totalParagraphs: number;
+        lastParagraphId: number;
+    }
+
+    async function captureDocumentSnapshot(
+        context: Word.RequestContext,
+        paragraphs: Word.ParagraphCollection,
+        styleCache: Map<string, StyleToken>
+    ): Promise<DocumentSnapshot> {
+
+        paragraphs.load("text, style, isListItem, alignment");
+        await context.sync();
+
+        for (let i = 0; i < paragraphs.items.length; i++) {
+            const p = paragraphs.items[i];
+            if (p.isListItem) {
+                p.listItem.load("level");
+            }
+        }
+        await context.sync();
+
+        const totalParagraphs = paragraphs.items.length;
+        const snapshotParagraphs: ParagraphSnapshot[] = [];
+
+        const indicesToCapture = new Set<number>();
+
+        for (let i = 0; i < Math.min(40, totalParagraphs); i++) {
+            indicesToCapture.add(i);
+        }
+
+        for (let i = Math.max(0, totalParagraphs - 10); i < totalParagraphs; i++) {
+            indicesToCapture.add(i);
+        }
+
+        const styleNameToToken = new Map<string, string>();
+        styleCache.forEach((data, token) => {
+            styleNameToToken.set(data.styleName, token);
+        });
+
+        for (const idx of Array.from(indicesToCapture).sort((a, b) => a - b)) {
+            const p = paragraphs.items[idx];
+            const text = (p.text || "").substring(0, 100).trim();
+            const styleName = p.style || "Normal";
+            const token = styleNameToToken.get(styleName) || "S1";
+
+            const isAllCaps = text.length > 0 && text === text.toUpperCase() && /[A-Z]/.test(text);
+            const hasBoldPattern = /^\*\*/.test(text) || /^\d+\.\s+[A-Z]/.test(text);
+
+            let listLevel = 0;
+            if (p.isListItem) {
+                try {
+                    listLevel = p.listItem.level || 0;
+                } catch (e) {
+                    listLevel = 0;
+                }
+            }
+
+            snapshotParagraphs.push({
+                id: idx + 1,
+                text: text,
+                styleId: styleName,
+                token: token,
+                fmt: {
+                    bold: hasBoldPattern,
+                    allCaps: isAllCaps,
+                    alignment: p.alignment || "Left"
+                },
+                list: {
+                    isListItem: p.isListItem || false,
+                    level: listLevel
+                }
+            });
+        }
+
+
+        return {
+            paragraphs: snapshotParagraphs,
+            totalParagraphs: totalParagraphs,
+            lastParagraphId: totalParagraphs
+        };
+    }
+
+    // ==========================================
+    // NETWORK LAYER - Model Fetching
+    // ==========================================
+
+    async function fetchModelsFromGoogle(apiKey: string): Promise<any[]> {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`;
+        const response = await fetch(url);
+        if (!response.ok) throw new Error("Failed to fetch models");
+        const data = await response.json();
+        
+        const allModels = data.models || [];
+        
+        const textModels = allModels.filter((m: any) => 
+            m.supportedGenerationMethods?.includes("generateContent")
+        );
+        
+        const getVersion = (name: string): number => {
+            const match = name.match(/gemini-(\d+\.?\d*)/i);
+            return match ? parseFloat(match[1]) : 0;
+        };
+        
+        const getTier = (name: string): number => {
+            const lower = name.toLowerCase();
+            if (lower.includes("pro")) return 3;
+            if (lower.includes("flash")) return 2;
+            return 1;
+        };
+        
+        const getVariant = (name: string): number => {
+            const lower = name.toLowerCase();
+            if (lower.includes("latest")) return 4;
+            if (lower.includes("002")) return 3;
+            if (lower.includes("001")) return 2;
+            if (lower.includes("exp")) return 1;
+            return 0;
+        };
+        
+        textModels.sort((a: any, b: any) => {
+            const aName = a.name || "";
+            const bName = b.name || "";
+            
+            const versionDiff = getVersion(bName) - getVersion(aName);
+            if (versionDiff !== 0) return versionDiff;
+            
+            const tierDiff = getTier(bName) - getTier(aName);
+            if (tierDiff !== 0) return tierDiff;
+            
+            return getVariant(bName) - getVariant(aName);
+        });
+        
+        return textModels;
+    }
+
+    // ENHANCEMENT 2B: Claude Model Fetching
+    async function fetchModelsFromAnthropic(apiKey: string): Promise<any[]> {
+        const url = "https://api.anthropic.com/v1/models";
+        const response = await fetch(url, {
+            method: "GET",
+            headers: {
+                "x-api-key": apiKey,
+                "anthropic-version": "2023-06-01",
+                "anthropic-dangerous-direct-browser-access": "true"
+            }
+        });
+        
+        if (!response.ok) throw new Error("Failed to fetch Claude models");
+        const data = await response.json();
+        
+        const models = data.data || [];
+        
+        // Sort by created_at descending (newest first)
+        models.sort((a: any, b: any) => {
+            const aDate = new Date(a.created_at || 0).getTime();
+            const bDate = new Date(b.created_at || 0).getTime();
+            return bDate - aDate;
+        });
+        
+        // Transform to match Gemini format for UI compatibility
+        return models.map((m: any) => ({
+            name: m.id,
+            displayName: m.display_name || m.id
+        }));
+    }
+
+    // ==========================================
+    // GEMINI API CALLS (with Structured Reasoning)
+    // ==========================================
+
+    // ENHANCEMENT 1A: Structured Reasoning for Router
+    // ENHANCEMENT 3: Terminology-aware routing for complex transformations
+    async function callGeminiRouter(
+        apiKey: string, 
+        model: string, 
+        prompt: string, 
+        styleMenu: string, 
+        snapshot: DocumentSnapshot,
+        cacheId: string | null,
+        isComplexTransformation: boolean = false,
+        fullDocumentText: string = ""
+    ): Promise<any> {
+        if (!apiKey) throw new Error("API Key missing.");
+        const cleanModel = (model || "gemini-2.0-flash-exp").replace(/^models\//, "");
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${apiKey}`;
+
+        const backtick = String.fromCharCode(96);
+        const snapshotJSON = JSON.stringify(snapshot.paragraphs, null, 2);
+        
+        const contextAnalysis = analyzePromptForReferences(prompt, cacheState.changelog);
+        const contextSection = buildContextSection(cacheState.changelog, contextAnalysis);
+        
+        const contextInstruction = cacheId 
+            ? "You have the FULL CONTRACT loaded in your context. Use this deep knowledge to understand parties, defined terms, liability caps, cross-references, and document structure."
+            : "Working in direct mode without cached context. Analyze based on the snapshot provided.";
+
+        // ENHANCEMENT 1C: Self-check instruction for short documents
+        const isShortDocument = snapshot.totalParagraphs < 20;
+        const selfCheckInstruction = isShortDocument 
+            ? "\n\n=== SELF-CHECK (Required for short documents) ===\nBefore finalizing your response, verify:\n1. Each action in the actions array directly maps to something in your change_plan\n2. No actions are included that weren't in your plan\n3. Your changes don't touch clauses that should remain unchanged\n4. Defined terms are used consistently"
+            : "";
+
+        // ENHANCEMENT 3: Complex transformation mode with full document and terminology
+        let complexTransformationSection = "";
+        let fullDocumentSection = "";
+        
+        if (isComplexTransformation && fullDocumentText) {
+            
+            fullDocumentSection = `
+    === FULL DOCUMENT TEXT ===
+    The complete document is provided below for context. Use this to ensure consistent terminology across ALL modifications.
+    
+    ${fullDocumentText}
+    
+    === END FULL DOCUMENT ===`;
+
+            complexTransformationSection = `
+    === COMPLEX TRANSFORMATION MODE ===
+    This is a complex transformation (like "make mutual", "flip parties", "convert to bilateral").
+    
+    CRITICAL: Before listing actions, you MUST:
+    
+    1. DECIDE ON TERMINOLOGY and output it in a "terminology" field:
+    {
+        "terminology": {
+            "transformation_type": "mutual_nda" | "party_swap" | "other",
+            "notes": "Describe your approach (e.g., 'Converting one-way NDA to mutual. Both parties can be Disclosing Party or Receiving Party.')",
+            "find_replace": [
+                { "find": "Recipient", "replace": "Receiving Party", "context": "role-based term for party receiving info" },
+                { "find": "Discloser", "replace": "Disclosing Party", "context": "role-based term for party sharing info" }
+            ],
+            "party_names": {
+                "party_a": "Original company name that was Discloser",
+                "party_b": "Original company name that was Recipient"
+            }
+        }
+    }
+    
+    2. Make each MODIFY instruction EXPLICIT and SELF-CONTAINED:
+       - DON'T say: "make this mutual" or "apply same changes"
+       - DO say: "Replace 'Recipient' with 'Receiving Party'. Replace 'Discloser' with 'Disclosing Party'. Add 'Either party may be the Disclosing Party or Receiving Party under this Agreement.'"
+       - Each instruction should work correctly INDEPENDENTLY, without needing to see other modifications
+    
+    3. Include COMPLETE find/replace instructions in EACH action's instruction field
+       Example instruction: "Convert to mutual. In this paragraph: (1) Replace 'the Recipient' with 'the Receiving Party', (2) Replace 'the Discloser' with 'the Disclosing Party', (3) Change 'shall not disclose' to 'each Receiving Party shall not disclose'. Keep all other content unchanged."`;
+        }
+
+        // ENHANCEMENT 1A: Structured reasoning output format
+        const systemInstruction = `SYSTEM: You are Vibe Legal, an intelligent legal document analyzer.
+
+    === YOUR KNOWLEDGE ===
+    ${contextInstruction}
+
+    === SESSION CONTEXT ===
+    ${contextSection}
+    ${fullDocumentSection}
+    ${complexTransformationSection}
+
+    === STRUCTURED REASONING PROCESS ===
+    
+    Before generating actions, you MUST think through these steps in the "reasoning" field:
+
+    1. TASK UNDERSTANDING: What exactly is being asked? What is explicitly OUT OF SCOPE and must NOT be changed?
+    
+    2. DOCUMENT ANALYSIS: What defined terms exist that relate to this task? Where are ALL relevant clauses?
+    
+    3. CHANGE PLAN: Create a numbered list of specific changes needed (and ONLY those changes)
+    
+    4. VERIFICATION: Confirm each action in the actions array maps to something in the change_plan
+
+    === DOCUMENT ANALYSIS PROCESS ===
+
+    STEP 1: IDENTIFY THE "MAIN CLAUSE" PATTERN
+    Look at the SNAPSHOT paragraphs. Find patterns like "1. Term", "2. Payment", etc.
+    Analyze:
+    - Which styleId/token is used for these numbered clauses?
+    - Are they Bold (fmt.bold = true)? All Caps (fmt.allCaps = true)?
+    - Is the numbering manual (e.g. "1.", "2.") or from a Word list (list.isListItem = true)?
+
+    STEP 2: IDENTIFY THE DOCUMENT STRUCTURE
+    - "Block" style: Heading on its own paragraph, body on the next
+    - "Inline" style: Heading and body combined with bold title
+
+    STEP 3: GENERATE YOUR RESPONSE
+    Apply the EXACT same style tokens and formatting to new content.
+
+    === CURRENT DOCUMENT STRUCTURE ===
+    Use these paragraph IDs for location_id. This is the LIVE state of the document.
+
+    STYLE MENU (available styles with tokens):
+    ${styleMenu}
+
+    DOCUMENT SNAPSHOT (first 40 + last 10 paragraphs):
+    ${snapshotJSON}
+
+    TOTAL PARAGRAPHS: ${snapshot.totalParagraphs}
+    LAST PARAGRAPH ID: ${snapshot.lastParagraphId}
+
+    === OUTPUT FORMAT (JSON ONLY) ===
+    Return ONLY valid JSON. No markdown. No code blocks (no ${backtick}${backtick}${backtick}).
+
+    {
+        "intent": "INSERT" | "MODIFY" | "HYBRID" | "ANSWER",
+        "terminology": {
+            "transformation_type": "mutual_nda | party_swap | other (ONLY for complex transformations)",
+            "notes": "Describe the transformation approach",
+            "find_replace": [{ "find": "old term", "replace": "new term" }]
+        },
+        "reasoning": {
+            "task_understanding": "What exactly is being asked? What is OUT OF SCOPE?",
+            "document_analysis": "What defined terms exist? Where are ALL relevant clauses?",
+            "change_plan": ["1. First change...", "2. Second change..."],
+            "verification": "Confirm: action 1 maps to change_plan item X, etc."
+        },
+        "analysis": {
+            "clauseStyle": { "token": "S1", "styleId": "Normal", "isBold": true, "isAllCaps": false },
+            "bodyStyle": { "token": "S1", "styleId": "Normal" },
+            "structure": "inline" | "block",
+            "lastClauseNumber": 5
+        },
+        "answer": "Optional explanation",
+        "actions": [
+            {
+                "type": "INSERT",
+                "location_id": <number>,
+                "description": "Human-readable description of what is being inserted",
+                "blocks": [{ "styleId": "<token>", "content": "**6. New Clause Title.** Body text here..." }]
+            },
+            {
+                "type": "MODIFY",
+                "target_id": <number>,
+                "description": "Human-readable description of the change",
+                "instruction": "What to change"
+            }
+        ]
+    }
+
+    === RULES ===
+
+    RULE 0: ACTION VS ANSWER (CRITICAL)
+    When the user asks to CHANGE, ADD, MODIFY, UPDATE, or REMOVE something:
+    - You MUST output actions in the "actions" array
+    - Do NOT just describe what you would do in the "answer" field
+    - Do NOT output the change as text - generate actual MODIFY or INSERT actions
+    
+    Examples that REQUIRE actions (not just answers):
+    - "Can you change this to NY?" → MODIFY action
+    - "Change governing law to New York" → MODIFY action  
+    - "Add a jurisdiction clause" → INSERT action
+    - "Can you add arbitration?" → INSERT action
+    - "Remove section 5" → MODIFY action with deletion
+    
+    Examples that are questions (answer only, no actions):
+    - "What does this clause mean?" → Answer only
+    - "Is this agreement balanced?" → Answer only
+    - "Explain the confidentiality provisions" → Answer only
+    
+    If uncertain, DEFAULT TO GENERATING ACTIONS.
+
+    RULE 1: STYLE MATCHING
+    - Use the EXACT token from your analysis for clause titles and body text
+    - If structure is "inline", combine title and body in ONE block with **bold** title
+    - If structure is "block", use separate blocks for title and body
+
+    RULE 2: INLINE FORMATTING
+    - Use **text** for bold, *text* for italic
+    - The engine converts these to proper OXML runs
+
+    RULE 3: LOCATION SEMANTICS
+    - location_id means "insert AFTER this paragraph ID"
+    - To insert BEFORE paragraph 25, use location_id: 24
+    - STANDARD CONTRACT ORDER: Definitions, Operative terms, Boilerplate, Governing Law, Signatures
+    - BOILERPLATE (No Waiver, Severability, etc.) goes BEFORE Governing Law
+
+    RULE 4: NUMBERING
+    - Continue from the last clause number, match the format (1. vs 1) vs (1))
+
+    RULE 5: INDEPENDENCE
+    - Unless the user explicitly references previous work, treat this as a fresh request
+    - Do not carry over specific values ($, dates, names) from previous changes to new clauses
+    ${selfCheckInstruction}
+
+    === CURRENT REQUEST ===
+    ${prompt}`;
+
+        const requestBody: any = {
+            contents: [{ parts: [{ text: systemInstruction }] }],
+            generationConfig: { responseMimeType: "application/json" }
+        };
+        
+        if (cacheId) {
+            requestBody.cachedContent = cacheId;
+        }
+
+        const response = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(requestBody)
+        });
+
+        const data = await response.json();
+        const text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "{}";
+
+
+        let result = tryParseJSON(text);
+
+        if (!result) {
+            console.warn("[Vibe] Router failed to parse JSON.");
+            result = {
+                intent: "ANSWER",
+                answer: "I understood your request but had trouble processing the response. Please try again."
+            };
+        }
+
+        if (result.reasoning) {
+        }
+        if (result.analysis) {
+        }
+
+        return result;
+    }
+
+    // Robust JSON Parser (The "JSON Shield")
+    function tryParseJSON(str: string) {
+        if (!str) return null;
+        try {
+            let cleanStr = str.replace(/```json\s*|\s*```/g, "").trim();
+            return JSON.parse(cleanStr);
+        } catch (e) {
+            console.warn("[Vibe] Direct JSON parse failed. Engaging Shield Protocols...", e);
+
+            try {
+                const firstOpen = str.indexOf('{');
+                const lastClose = str.lastIndexOf('}');
+
+                if (firstOpen !== -1 && lastClose !== -1 && lastClose > firstOpen) {
+                    let candidate = str.substring(firstOpen, lastClose + 1);
+                    candidate = candidate.replace(/([{,]\s*)([a-zA-Z0-9_]+?)\s*:/g, '$1"$2":');
+                    candidate = candidate.replace(/,\s*}/g, '}').replace(/,\s*]/g, ']');
+                    return JSON.parse(candidate);
+                }
+            } catch (e2) {
+                console.error("[Vibe] JSON Shield failed.", e2);
+            }
+            return null;
+        }
+    }
+
+    // ENHANCEMENT 1B: Structured Reasoning for Redline
+    async function callGeminiRedline(
+        apiKey: string, 
+        model: string, 
+        instruction: string, 
+        originalText: string,
+        cacheId: string | null
+    ): Promise<string> {
+        const cleanModel = (model || "gemini-2.0-flash-exp").replace(/^models\//, "");
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${apiKey}`;
+
+        const contextAnalysis = analyzePromptForReferences(instruction, cacheState.changelog);
+        
+        let contextNote = "";
+        if (cacheId) {
+            contextNote = "You have the full contract in context. Use this to ensure accurate cross-references (e.g., 'subject to Section 12' or 'as defined above').";
+        }
+        
+        let referenceNote = "";
+        if (contextAnalysis.includeHistory && contextAnalysis.relevantEntries.length > 0) {
+            const lastChange = contextAnalysis.relevantEntries[0];
+            referenceNote = "\nUser may be referencing recent change: " + lastChange.description;
+        }
+
+        // ENHANCEMENT 1B: Updated redline prompt with structured thinking
+        const systemInstruction = `SYSTEM: You are a strict legal editor.
+    ${contextNote}
+    ${referenceNote}
+
+    BEFORE MAKING CHANGES, THINK THROUGH:
+    1. What specific change is requested? (State in one sentence)
+    2. What should NOT be changed? (Be explicit)
+    3. Make ONLY the requested change, nothing else.
+
+    IMPORTANT: Apply ONLY what the instruction asks for. Do not carry over specific values from other clauses unless explicitly requested.
+
+    Return ONLY the modified legal text. No markdown. No quotes. No LaTeX. No explanations. Preserve placeholders like [Name].
+    
+    The output must contain ONLY the modified text, nothing else.`;
+
+        const fullPrompt = `ORIGINAL TEXT: "${originalText}"\n\nINSTRUCTION: ${instruction}`;
+
+        const requestBody: any = {
+            contents: [{ parts: [{ text: `${systemInstruction}\n\n${fullPrompt}` }] }]
+        };
+        
+        if (cacheId) {
+            requestBody.cachedContent = cacheId;
+        }
+
+        const response = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(requestBody)
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            const errorMsg = errorData.error?.message || `HTTP ${response.status}`;
+            console.error("[Vibe] Redline API Error:", response.status, errorMsg);
+            console.error("[Vibe] Original text was:", originalText.substring(0, 100) + "...");
+            throw new Error(`Redline Error: ${errorMsg}`);
+        }
+        const data = await response.json();
+        return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || originalText;
     }
 
     async function callGeminiQuestion(
@@ -975,11 +1679,9 @@ script:
         let systemPrompt: string;
         
         if (isShortDocument) {
-            console.log("[Vibe] Short document (" + currentDocumentText.length + " chars) - sending full text for question");
             
             systemPrompt = "You are Vibe Legal, a legal document analyst.\n\n=== CURRENT DOCUMENT (FULL TEXT) ===\n" + currentDocumentText + "\n" + changeSection + "\n=== INSTRUCTIONS ===\nAnswer the user's question based on the document above.\nThis is the CURRENT state of the document with all changes applied.\nBe specific and reference actual clauses or language.\n\nUSER QUESTION: " + question;
         } else {
-            console.log("[Vibe] Long document (" + currentDocumentText.length + " chars) - using cache + changelog for question");
             
             const contextNote = cacheId
                 ? "You have the full contract loaded in your context from when the session started."
@@ -1016,314 +1718,74 @@ script:
     }
 
     // ==========================================
-    // CONVERSATION CONTEXT SYSTEM
+    // CLAUDE API CALLS (ENHANCEMENT 2C)
     // ==========================================
 
-    interface ContextAnalysis {
-        includeHistory: boolean;
-        relevantEntries: ChangeEntry[];
-        referenceType: "none" | "explicit" | "implicit";
-    }
-
-    function analyzePromptForReferences(prompt: string, changelog: ChangeEntry[]): ContextAnalysis {
-        // Patterns that EXPLICITLY reference previous work
-        const explicitPatterns = [
-            /same (thing|way|approach|treatment|wording|language)/i,
-            /like (before|we did|the previous|earlier|last time)/i,
-            /similar(ly)? to (what|how)/i,
-            /do that (to|for|with)/i,
-            /apply (that|this|the same) to/i,
-            /repeat (that|this) for/i,
-            /as we did (with|for|to)/i,
-            /(also|too|as well)$/i
-        ];
-        
-        // Patterns that IMPLICITLY might reference previous work
-        const implicitPatterns = [
-            /^(and|also|now)\s/i,
-            /the other/i,
-            /remaining/i,
-            /rest of/i
-        ];
-        
-        const hasExplicitReference = explicitPatterns.some(p => p.test(prompt));
-        const hasImplicitReference = implicitPatterns.some(p => p.test(prompt));
-        
-        if (hasExplicitReference) {
-            // User explicitly wants to reference previous work
-            // Include last 3 changes with full details
-            return {
-                includeHistory: true,
-                relevantEntries: changelog.slice(-3),
-                referenceType: "explicit"
-            };
-        }
-        
-        if (hasImplicitReference && changelog.length > 0) {
-            // Might be referencing - include minimal context
-            return {
-                includeHistory: true,
-                relevantEntries: changelog.slice(-1),
-                referenceType: "implicit"
-            };
-        }
-        
-        // Independent request - no history needed
-        return {
-            includeHistory: false,
-            relevantEntries: [],
-            referenceType: "none"
-        };
-    }
-
-    function buildContextSection(changelog: ChangeEntry[], analysis: ContextAnalysis): string {
-        // Always show what's been completed (but framed as DONE, not instructions)
-        let completedSection = "";
-        if (changelog.length > 0) {
-            const completedList = changelog.map((c, i) => 
-                `[${i + 1}] ${c.type}: ${c.description}`
-            ).join("\n");
-            
-            completedSection = "COMPLETED CHANGES THIS SESSION:\n" + completedList + "\n";
-        }
-        
-        // Add reference context only if needed
-        let referenceSection = "";
-        if (analysis.includeHistory && analysis.relevantEntries.length > 0) {
-            if (analysis.referenceType === "explicit") {
-                const details = analysis.relevantEntries.map(e => {
-                    const contentPreview = e.content ? " Content: \"" + e.content.substring(0, 150) + "...\"" : "";
-                    return "- " + e.type + " " + e.description + contentPreview;
-                }).join("\n");
-                
-                referenceSection = "\nUSER IS REFERENCING PREVIOUS WORK. Relevant changes:\n" + details + "\n\nApply a similar approach to the current request.";
-            } else {
-                // Implicit - be cautious
-                referenceSection = "\nPOSSIBLE REFERENCE to recent change: " + analysis.relevantEntries[0].description + "\nOnly apply if the user's request clearly relates to this.";
-            }
-        }
-        
-        // Always include the independence instruction
-        const independenceNote = "\nIMPORTANT: Unless the user explicitly says \"same\", \"like before\", or similar:\n- Treat this request as INDEPENDENT\n- Do NOT apply previous $ amounts, caps, or specific wording to new clauses\n- Do NOT assume connections between different sections\n- The changelog shows what's DONE, not patterns to repeat";
-
-        return completedSection + referenceSection + independenceNote;
-    }
-    // ==========================================
-    // V10.0 DOCUMENT SNAPSHOT (AI-Driven Analysis)
-    // ==========================================
-
-    interface ParagraphSnapshot {
-        id: number;
-        text: string;
-        styleId: string;
-        token: string;
-        fmt: {
-            bold: boolean;
-            allCaps: boolean;
-            alignment: string;
-        };
-        list: {
-            isListItem: boolean;
-            level: number;
-        };
-    }
-
-    interface DocumentSnapshot {
-        paragraphs: ParagraphSnapshot[];
-        totalParagraphs: number;
-        lastParagraphId: number;
-    }
-
-    async function captureDocumentSnapshot(
-        context: Word.RequestContext,
-        paragraphs: Word.ParagraphCollection,
-        styleCache: Map<string, StyleToken>
-    ): Promise<DocumentSnapshot> {
-        console.log("[Vibe] Capturing Document Snapshot for AI Analysis...");
-
-        // Load ALL properties we need in ONE batch - use style (display name) not styleId
-        paragraphs.load("text, style, isListItem, alignment");
-        await context.sync();
-
-        // For list items, load level
-        for (let i = 0; i < paragraphs.items.length; i++) {
-            const p = paragraphs.items[i];
-            if (p.isListItem) {
-                p.listItem.load("level");
-            }
-        }
-        await context.sync();
-
-        const totalParagraphs = paragraphs.items.length;
-        const snapshotParagraphs: ParagraphSnapshot[] = [];
-
-        // Determine which paragraphs to capture (first 40 + last 10)
-        const indicesToCapture = new Set<number>();
-
-        // First 40
-        for (let i = 0; i < Math.min(40, totalParagraphs); i++) {
-            indicesToCapture.add(i);
-        }
-
-        // Last 10
-        for (let i = Math.max(0, totalParagraphs - 10); i < totalParagraphs; i++) {
-            indicesToCapture.add(i);
-        }
-
-        // Build reverse token lookup (styleName -> token) using display names
-        const styleNameToToken = new Map<string, string>();
-        styleCache.forEach((data, token) => {
-            styleNameToToken.set(data.styleName, token);
-        });
-
-        // Capture snapshots
-        for (const idx of Array.from(indicesToCapture).sort((a, b) => a - b)) {
-            const p = paragraphs.items[idx];
-            const text = (p.text || "").substring(0, 100).trim();
-            const styleName = p.style || "Normal";  // Use display name
-            const token = styleNameToToken.get(styleName) || "S1";
-
-            // Detect formatting traits from text patterns
-            const isAllCaps = text.length > 0 && text === text.toUpperCase() && /[A-Z]/.test(text);
-            const hasBoldPattern = /^\*\*/.test(text) || /^\d+\.\s+[A-Z]/.test(text);
-
-            let listLevel = 0;
-            if (p.isListItem) {
-                try {
-                    listLevel = p.listItem.level || 0;
-                } catch (e) {
-                    listLevel = 0;
-                }
-            }
-
-            snapshotParagraphs.push({
-                id: idx + 1, // 1-indexed for document map
-                text: text,
-                styleId: styleName,  // Use display name (styleName)
-                token: token,
-                fmt: {
-                    bold: hasBoldPattern,
-                    allCaps: isAllCaps,
-                    alignment: p.alignment || "Left"
-                },
-                list: {
-                    isListItem: p.isListItem || false,
-                    level: listLevel
-                }
-            });
-        }
-
-        console.log(`[Vibe] Snapshot captured: ${snapshotParagraphs.length} paragraphs from ${totalParagraphs} total`);
-
-        return {
-            paragraphs: snapshotParagraphs,
-            totalParagraphs: totalParagraphs,
-            lastParagraphId: totalParagraphs
-        };
-    }
-
-    // ==========================================
-    // NETWORK LAYER
-    // ==========================================
-
-    async function fetchModelsFromGoogle(apiKey: string): Promise<any[]> {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`;
-        const response = await fetch(url);
-        if (!response.ok) throw new Error("Failed to fetch models");
-        const data = await response.json();
-        
-        const allModels = data.models || [];
-        
-        // Filter: Only keep models that support generateContent
-        const textModels = allModels.filter((m: any) => 
-            m.supportedGenerationMethods?.includes("generateContent")
-        );
-        
-        // Helper to extract version number (e.g., "gemini-1.5-pro" -> 1.5)
-        const getVersion = (name: string): number => {
-            const match = name.match(/gemini-(\d+\.?\d*)/i);
-            return match ? parseFloat(match[1]) : 0;
-        };
-        
-        // Helper to get model tier (Pro > Flash > others)
-        const getTier = (name: string): number => {
-            const lower = name.toLowerCase();
-            if (lower.includes("pro")) return 3;
-            if (lower.includes("flash")) return 2;
-            return 1;
-        };
-        
-        // Helper to get variant priority (latest > 002 > 001 > exp)
-        const getVariant = (name: string): number => {
-            const lower = name.toLowerCase();
-            if (lower.includes("latest")) return 4;
-            if (lower.includes("002")) return 3;
-            if (lower.includes("001")) return 2;
-            if (lower.includes("exp")) return 1;
-            return 0;
-        };
-        
-        // Sort: Primary by version (desc), then tier (desc), then variant (desc)
-        textModels.sort((a: any, b: any) => {
-            const aName = a.name || "";
-            const bName = b.name || "";
-            
-            // Compare versions (higher is better)
-            const versionDiff = getVersion(bName) - getVersion(aName);
-            if (versionDiff !== 0) return versionDiff;
-            
-            // Compare tier (Pro > Flash)
-            const tierDiff = getTier(bName) - getTier(aName);
-            if (tierDiff !== 0) return tierDiff;
-            
-            // Compare variant (latest > 002 > 001)
-            return getVariant(bName) - getVariant(aName);
-        });
-        
-        console.log("[Vibe] Sorted models:", textModels.slice(0, 5).map((m: any) => m.name));
-        return textModels;
-    }
-
-    async function callGeminiRouter(
+    async function callClaudeRouter(
         apiKey: string, 
         model: string, 
         prompt: string, 
         styleMenu: string, 
         snapshot: DocumentSnapshot,
-        cacheId: string | null
+        cacheId: string | null,  // Always null for Claude
+        isComplexTransformation: boolean = false,
+        fullDocumentText: string = ""
     ): Promise<any> {
         if (!apiKey) throw new Error("API Key missing.");
-        const cleanModel = (model || "gemini-2.0-flash-exp").replace(/^models\//, "");
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${apiKey}`;
 
         const backtick = String.fromCharCode(96);
         const snapshotJSON = JSON.stringify(snapshot.paragraphs, null, 2);
         
-        // NEW: Analyze prompt for references and build context
         const contextAnalysis = analyzePromptForReferences(prompt, cacheState.changelog);
         const contextSection = buildContextSection(cacheState.changelog, contextAnalysis);
+
+        const isShortDocument = snapshot.totalParagraphs < 20;
+        const selfCheckInstruction = isShortDocument 
+            ? "\n\n=== SELF-CHECK (Required for short documents) ===\nBefore finalizing your response, verify:\n1. Each action in the actions array directly maps to something in your change_plan\n2. No actions are included that weren't in your plan\n3. Your changes don't touch clauses that should remain unchanged\n4. Defined terms are used consistently"
+            : "";
+
+        // ENHANCEMENT 3: Complex transformation mode with full document and terminology
+        let complexTransformationSection = "";
+        let fullDocumentSection = "";
         
-        // Context awareness instruction
-        const contextInstruction = cacheId 
-            ? "You have the FULL CONTRACT loaded in your context. Use this deep knowledge to understand parties, defined terms, liability caps, cross-references, and document structure."
-            : "Working in direct mode without cached context. Analyze based on the snapshot provided.";
+        if (isComplexTransformation && fullDocumentText) {
+            
+            fullDocumentSection = `
+    === FULL DOCUMENT TEXT ===
+    ${fullDocumentText}
+    === END FULL DOCUMENT ===`;
 
-        const systemInstruction = `SYSTEM: You are Vibe Legal, an intelligent legal document analyzer.
+            complexTransformationSection = `
+    === COMPLEX TRANSFORMATION MODE ===
+    This is a complex transformation. Before listing actions:
+    1. Output a "terminology" field with find/replace mappings
+    2. Make each MODIFY instruction EXPLICIT and SELF-CONTAINED
+    3. Don't say "make mutual" - say exactly what to find and replace in each paragraph`;
+        }
 
-    === YOUR KNOWLEDGE ===
-    ${contextInstruction}
+        const systemInstruction = `You are Vibe Legal, an intelligent legal document analyzer.
 
     === SESSION CONTEXT ===
     ${contextSection}
+    ${fullDocumentSection}
+    ${complexTransformationSection}
+
+    === STRUCTURED REASONING PROCESS ===
+
+    Before generating actions, you MUST think through these steps in the "reasoning" field:
+
+    1. TASK UNDERSTANDING: What exactly is being asked? What is explicitly OUT OF SCOPE and must NOT be changed?
+
+    2. DOCUMENT ANALYSIS: What defined terms exist that relate to this task? Where are ALL relevant clauses?
+
+    3. CHANGE PLAN: Create a numbered list of specific changes needed (and ONLY those changes)
+
+    4. VERIFICATION: Confirm each action in the actions array maps to something in the change_plan
 
     === DOCUMENT ANALYSIS PROCESS ===
 
     STEP 1: IDENTIFY THE "MAIN CLAUSE" PATTERN
     Look at the SNAPSHOT paragraphs. Find patterns like "1. Term", "2. Payment", etc.
-    Analyze:
-    - Which styleId/token is used for these numbered clauses?
-    - Are they Bold (fmt.bold = true)? All Caps (fmt.allCaps = true)?
-    - Is the numbering manual (e.g. "1.", "2.") or from a Word list (list.isListItem = true)?
 
     STEP 2: IDENTIFY THE DOCUMENT STRUCTURE
     - "Block" style: Heading on its own paragraph, body on the next
@@ -1333,7 +1795,6 @@ script:
     Apply the EXACT same style tokens and formatting to new content.
 
     === CURRENT DOCUMENT STRUCTURE ===
-    Use these paragraph IDs for location_id. This is the LIVE state of the document.
 
     STYLE MENU (available styles with tokens):
     ${styleMenu}
@@ -1344,151 +1805,108 @@ script:
     TOTAL PARAGRAPHS: ${snapshot.totalParagraphs}
     LAST PARAGRAPH ID: ${snapshot.lastParagraphId}
 
-    === OUTPUT FORMAT (JSON ONLY) ===
-    Return ONLY valid JSON. No markdown. No code blocks (no ${backtick}${backtick}${backtick}).
+    === OUTPUT FORMAT ===
+    Respond with valid JSON only. No markdown code blocks.
 
     {
-        "intent": "INSERT" | "MODIFY" | "HYBRID" | "ANSWER",
-        "analysis": {
-            "clauseStyle": { "token": "S1", "styleId": "Normal", "isBold": true, "isAllCaps": false },
-            "bodyStyle": { "token": "S1", "styleId": "Normal" },
-            "structure": "inline" | "block",
-            "lastClauseNumber": 5
+    "intent": "INSERT" | "MODIFY" | "HYBRID" | "ANSWER",
+    "reasoning": {
+        "task_understanding": "What exactly is being asked? What is OUT OF SCOPE?",
+        "document_analysis": "What defined terms exist? Where are ALL relevant clauses?",
+        "change_plan": ["1. First change...", "2. Second change..."],
+        "verification": "Confirm: action 1 maps to change_plan item X, etc."
+    },
+    "analysis": {
+        "clauseStyle": { "token": "S1", "styleId": "Normal", "isBold": true, "isAllCaps": false },
+        "bodyStyle": { "token": "S1", "styleId": "Normal" },
+        "structure": "inline" | "block",
+        "lastClauseNumber": 5
+    },
+    "answer": "Optional explanation",
+    "actions": [
+        {
+            "type": "INSERT",
+            "location_id": <number>,
+            "description": "Human-readable description",
+            "blocks": [{ "styleId": "<token>", "content": "**6. New Clause Title.** Body text here..." }]
         },
-        "answer": "Optional explanation",
-        "actions": [
-            {
-                "type": "INSERT",
-                "location_id": <number>,
-                "blocks": [{ "styleId": "<token>", "content": "**6. New Clause Title.** Body text here..." }]
-            },
-            {
-                "type": "MODIFY",
-                "target_id": <number>,
-                "instruction": "What to change"
-            }
-        ]
+        {
+            "type": "MODIFY",
+            "target_id": <number>,
+            "description": "Human-readable description",
+            "instruction": "What to change"
+        }
+    ]
     }
 
     === RULES ===
 
-    RULE 1: STYLE MATCHING
-    - Use the EXACT token from your analysis for clause titles and body text
-    - If structure is "inline", combine title and body in ONE block with **bold** title
-    - If structure is "block", use separate blocks for title and body
+    RULE 0: ACTION VS ANSWER (CRITICAL)
+    When the user asks to CHANGE, ADD, MODIFY, UPDATE, or REMOVE something:
+    - You MUST output actions in the "actions" array
+    - Do NOT just describe what you would do in the "answer" field  
+    - Generate actual MODIFY or INSERT actions
+    
+    If uncertain whether it's an action or question, DEFAULT TO GENERATING ACTIONS.
 
-    RULE 2: INLINE FORMATTING
-    - Use **text** for bold, *text* for italic
-    - The engine converts these to proper OXML runs
-
-    RULE 3: LOCATION SEMANTICS
-    - location_id means "insert AFTER this paragraph ID"
-    - To insert BEFORE paragraph 25, use location_id: 24
-    - STANDARD CONTRACT ORDER: Definitions, Operative terms, Boilerplate, Governing Law, Signatures
-    - BOILERPLATE (No Waiver, Severability, etc.) goes BEFORE Governing Law
-
-    RULE 4: NUMBERING
-    - Continue from the last clause number, match the format (1. vs 1) vs (1))
-
-    RULE 5: INDEPENDENCE
-    - Unless the user explicitly references previous work, treat this as a fresh request
-    - Do not carry over specific values ($, dates, names) from previous changes to new clauses
+    RULE 1: Use the EXACT token from your analysis for clause titles and body text
+    RULE 2: Use **text** for bold, *text* for italic
+    RULE 3: location_id means "insert AFTER this paragraph ID"
+    RULE 4: Continue from the last clause number, match the format
+    RULE 5: Unless the user explicitly references previous work, treat this as a fresh request
+    ${selfCheckInstruction}
 
     === CURRENT REQUEST ===
     ${prompt}`;
 
-        const requestBody: any = {
-            contents: [{ parts: [{ text: systemInstruction }] }],
-            generationConfig: { responseMimeType: "application/json" }
-        };
-        
-        if (cacheId) {
-            requestBody.cachedContent = cacheId;
-        }
-
-        const response = await fetch(url, {
+        const response = await fetch("https://api.anthropic.com/v1/messages", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(requestBody)
+            headers: {
+                "x-api-key": apiKey,
+                "anthropic-version": "2023-06-01",
+                "anthropic-dangerous-direct-browser-access": "true",
+                "content-type": "application/json"
+            },
+            body: JSON.stringify({
+                model: model || "claude-sonnet-4-20250514",
+                max_tokens: 8192,
+                messages: [{ role: "user", content: systemInstruction }]
+            })
         });
 
-        const data = await response.json();
-        const text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "{}";
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.error?.message || `HTTP ${response.status}`);
+        }
 
-        console.log("[Vibe] Router Response:", text.substring(0, 200) + "...");
+        const data = await response.json();
+        const text = data.content?.[0]?.text?.trim() || "{}";
+
 
         let result = tryParseJSON(text);
 
         if (!result) {
-            console.warn("[Vibe] Router failed to parse JSON.");
+            console.warn("[Vibe] Claude Router failed to parse JSON.");
             result = {
                 intent: "ANSWER",
                 answer: "I understood your request but had trouble processing the response. Please try again."
             };
         }
 
-        if (result.analysis) {
-            console.log("[Vibe] AI Analysis:", result.analysis);
+        if (result.reasoning) {
         }
 
         return result;
     }
 
-    // 7. Robust JSON Parser (The "JSON Shield")
-    function tryParseJSON(str: string) {
-        if (!str) return null;
-        try {
-            // 1. Strip Markdown Code Blocks
-            let cleanStr = str.replace(/```json\s*|\s*```/g, "").trim();
-
-            // 2. Attempt Direct Parse
-            return JSON.parse(cleanStr);
-        } catch (e) {
-            console.warn("[Vibe] Direct JSON parse failed. Engaging Shield Protocols...", e);
-
-            try {
-                // 3. Extract JSON Payload (Find first '{' and last '}')
-                const firstOpen = str.indexOf('{');
-                const lastClose = str.lastIndexOf('}');
-
-                if (firstOpen !== -1 && lastClose !== -1 && lastClose > firstOpen) {
-                    let candidate = str.substring(firstOpen, lastClose + 1);
-
-                    // 4. Sanitize Keys (Force-quote unquoted keys)
-                    // Regex looks for keys that are NOT quoted and followed by a colon
-                    // e.g. { key: "val" } -> { "key": "val" }
-                    // Note: This is a heuristic and might need further refinement for complex cases
-                    candidate = candidate.replace(/([{,]\s*)([a-zA-Z0-9_]+?)\s*:/g, '$1"$2":');
-
-                    // 5. Remove Trailing Commas
-                    candidate = candidate.replace(/,\s*}/g, '}').replace(/,\s*]/g, ']');
-
-                    return JSON.parse(candidate);
-                }
-            } catch (e2) {
-                console.error("[Vibe] JSON Shield failed.", e2);
-            }
-            return null;
-        }
-    }
-
-    async function callGeminiRedline(
+    async function callClaudeRedline(
         apiKey: string, 
         model: string, 
         instruction: string, 
         originalText: string,
-        cacheId: string | null
+        cacheId: string | null  // Always null for Claude
     ): Promise<string> {
-        const cleanModel = (model || "gemini-2.0-flash-exp").replace(/^models\//, "");
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${apiKey}`;
-
-        // Analyze if this instruction references previous work
         const contextAnalysis = analyzePromptForReferences(instruction, cacheState.changelog);
-        
-        let contextNote = "";
-        if (cacheId) {
-            contextNote = "You have the full contract in context. Use this to ensure accurate cross-references (e.g., 'subject to Section 12' or 'as defined above').";
-        }
         
         let referenceNote = "";
         if (contextAnalysis.includeHistory && contextAnalysis.relevantEntries.length > 0) {
@@ -1496,40 +1914,157 @@ script:
             referenceNote = "\nUser may be referencing recent change: " + lastChange.description;
         }
 
-        const systemInstruction = `SYSTEM: You are a strict legal editor.
-    ${contextNote}
+        const systemInstruction = `You are a strict legal editor.
     ${referenceNote}
+
+    BEFORE MAKING CHANGES, THINK THROUGH:
+    1. What specific change is requested? (State in one sentence)
+    2. What should NOT be changed? (Be explicit)
+    3. Make ONLY the requested change, nothing else.
 
     IMPORTANT: Apply ONLY what the instruction asks for. Do not carry over specific values from other clauses unless explicitly requested.
 
-    Return ONLY the modified legal text. No markdown. No quotes. No LaTeX. Preserve placeholders like [Name].`;
+    Return ONLY the modified legal text. No markdown. No quotes. No LaTeX. No explanations. Preserve placeholders like [Name].
 
-        const fullPrompt = `ORIGINAL TEXT: "${originalText}"\n\nINSTRUCTION: ${instruction}`;
+    The output must contain ONLY the modified text, nothing else.
 
-        const requestBody: any = {
-            contents: [{ parts: [{ text: `${systemInstruction}\n\n${fullPrompt}` }] }]
-        };
-        
-        if (cacheId) {
-            requestBody.cachedContent = cacheId;
-        }
+    ORIGINAL TEXT: "${originalText}"
 
-        const response = await fetch(url, {
+    INSTRUCTION: ${instruction}`;
+
+        const response = await fetch("https://api.anthropic.com/v1/messages", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(requestBody)
+            headers: {
+                "x-api-key": apiKey,
+                "anthropic-version": "2023-06-01",
+                "anthropic-dangerous-direct-browser-access": "true",
+                "content-type": "application/json"
+            },
+            body: JSON.stringify({
+                model: model || "claude-sonnet-4-20250514",
+                max_tokens: 4096,
+                messages: [{ role: "user", content: systemInstruction }]
+            })
         });
 
         if (!response.ok) {
-            // Log the actual error for debugging
             const errorData = await response.json().catch(() => ({}));
             const errorMsg = errorData.error?.message || `HTTP ${response.status}`;
-            console.error("[Vibe] Redline API Error:", response.status, errorMsg);
-            console.error("[Vibe] Original text was:", originalText.substring(0, 100) + "...");
+            console.error("[Vibe] Claude Redline API Error:", response.status, errorMsg);
             throw new Error(`Redline Error: ${errorMsg}`);
         }
+        
         const data = await response.json();
-        return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || originalText;
+        return data.content?.[0]?.text?.trim() || originalText;
+    }
+
+    async function callClaudeQuestion(
+        apiKey: string,
+        model: string,
+        question: string,
+        currentDocumentText: string,
+        changelog: ChangeEntry[],
+        cacheId: string | null  // Always null for Claude
+    ): Promise<string> {
+        const isShortDocument = currentDocumentText.length < CACHE_CONFIG.minCacheChars;
+        
+        let changeSection = "";
+        if (changelog.length > 0) {
+            const changes = changelog.map((c, i) => {
+                const contentPreview = c.content 
+                    ? "\nNew text: \"" + c.content.substring(0, 1000) + (c.content.length > 1000 ? "..." : "") + "\""
+                    : "";
+                return "[" + (i + 1) + "] " + c.type + ": " + c.description + contentPreview;
+            }).join("\n\n");
+            
+            changeSection = "\n=== CHANGES MADE THIS SESSION ===\n" + changes + "\n\nIMPORTANT: These changes are now part of the document. Answer based on the CURRENT state.\n";
+        }
+        
+        let systemPrompt: string;
+        
+        if (isShortDocument) {
+            systemPrompt = "You are Vibe Legal, a legal document analyst.\n\n=== CURRENT DOCUMENT (FULL TEXT) ===\n" + currentDocumentText + "\n" + changeSection + "\n=== INSTRUCTIONS ===\nAnswer the user's question based on the document above.\nBe specific and reference actual clauses or language.\n\nUSER QUESTION: " + question;
+        } else {
+            // For long documents without cache, send a truncated version
+            const truncatedDoc = currentDocumentText.substring(0, 50000) + (currentDocumentText.length > 50000 ? "\n...[document truncated]..." : "");
+            systemPrompt = "You are Vibe Legal, a legal document analyst.\n\n=== DOCUMENT EXCERPT ===\n" + truncatedDoc + "\n" + changeSection + "\n=== INSTRUCTIONS ===\nAnswer the user's question based on the document.\nBe specific and reference actual clauses or language.\n\nUSER QUESTION: " + question;
+        }
+        
+        const response = await fetch("https://api.anthropic.com/v1/messages", {
+            method: "POST",
+            headers: {
+                "x-api-key": apiKey,
+                "anthropic-version": "2023-06-01",
+                "anthropic-dangerous-direct-browser-access": "true",
+                "content-type": "application/json"
+            },
+            body: JSON.stringify({
+                model: model || "claude-sonnet-4-20250514",
+                max_tokens: 4096,
+                messages: [{ role: "user", content: systemPrompt }]
+            })
+        });
+        
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.error?.message || "HTTP " + response.status);
+        }
+        
+        const data = await response.json();
+        return data.content?.[0]?.text?.trim() || "I couldn't analyze the document.";
+    }
+
+    // ==========================================
+    // UNIFIED API DISPATCHER (ENHANCEMENT 2D)
+    // ==========================================
+
+    async function callRouter(
+        prompt: string, 
+        styleMenu: string, 
+        snapshot: DocumentSnapshot,
+        cacheId: string | null,
+        isComplexTransformation: boolean = false,
+        fullDocumentText: string = ""
+    ): Promise<any> {
+        const apiKey = getCurrentApiKey();
+        const model = getCurrentModel();
+        
+        if (providerConfig.provider === "claude") {
+            return callClaudeRouter(apiKey, model, prompt, styleMenu, snapshot, null, isComplexTransformation, fullDocumentText);
+        } else {
+            return callGeminiRouter(apiKey, model, prompt, styleMenu, snapshot, cacheId, isComplexTransformation, fullDocumentText);
+        }
+    }
+
+    async function callRedline(
+        instruction: string, 
+        originalText: string,
+        cacheId: string | null
+    ): Promise<string> {
+        const apiKey = getCurrentApiKey();
+        const model = getCurrentModel();
+        
+        if (providerConfig.provider === "claude") {
+            return callClaudeRedline(apiKey, model, instruction, originalText, null);
+        } else {
+            return callGeminiRedline(apiKey, model, instruction, originalText, cacheId);
+        }
+    }
+
+    async function callQuestion(
+        question: string,
+        currentDocumentText: string,
+        changelog: ChangeEntry[],
+        cacheId: string | null
+    ): Promise<string> {
+        const apiKey = getCurrentApiKey();
+        const model = getCurrentModel();
+        
+        if (providerConfig.provider === "claude") {
+            return callClaudeQuestion(apiKey, model, question, currentDocumentText, changelog, null);
+        } else {
+            return callGeminiQuestion(apiKey, model, question, currentDocumentText, changelog, cacheId);
+        }
     }
 
     // ==========================================
@@ -1537,44 +2072,33 @@ script:
     // ==========================================
 
     interface StyleToken {
-        token: string; // "S1", "S2"
+        token: string;
         styleId: string;
         styleName: string;
     }
 
-    // 1. Generate Style Menu (The "Menu of Dishes")
     async function generateStyleMenuAndCache(context: Word.RequestContext, paragraphs: Word.ParagraphCollection): Promise<{ styleCache: Map<string, StyleToken>, menu: string }> {
-        console.log("[Vibe] Generating Style Menu (Universal Menu)...");
 
-        // 1. Load Styles (include text for debug logging and sample extraction)
         paragraphs.load("text, style, styleId");
         await context.sync();
 
-        // DEBUG: Log what styles we actually have
-        console.log("[Vibe Debug] Scanning paragraph styles (first 5):");
         for (let i = 0; i < Math.min(5, paragraphs.items.length); i++) {
             const p = paragraphs.items[i];
-            console.log(`  [${i}] styleId="${p.styleId}" style="${p.style}" text="${(p.text || "").substring(0, 30)}"`);
         }
 
         const styleCache = new Map<string, StyleToken>();
         const menuLines = [];
         const seenStyles = new Map<string, { styleName: string, index: number }>();
 
-        // 2. Scan for unique styles - USE style (display name) NOT styleId
         for (let i = 0; i < paragraphs.items.length; i++) {
             const p = paragraphs.items[i];
-            
-            // Use display name as primary identifier (styleId returns undefined in Word Online)
             const styleName = p.style || "Normal";
 
             if (!seenStyles.has(styleName) && styleName) {
-                console.log(`[Vibe Debug] Found style: "${styleName}"`);
                 seenStyles.set(styleName, { styleName, index: i });
             }
         }
 
-        // REFACTOR: Force Include Standard Styles (Universal Menu) - use display names
         const standardStyles = [
             { id: "Normal", name: "Normal" },
             { id: "Heading 1", name: "Heading 1" },
@@ -1584,12 +2108,10 @@ script:
 
         standardStyles.forEach(style => {
             if (!seenStyles.has(style.id)) {
-                console.log(`[Vibe] Force adding standard style: ${style.name}`);
-                seenStyles.set(style.id, { styleName: style.name, index: -1 }); // -1 indicates no sample text available
+                seenStyles.set(style.id, { styleName: style.name, index: -1 });
             }
         });
 
-        // 3. Build Cache and Menu - use styleName for both ID and name
         const styleNames = Array.from(seenStyles.keys());
         let tokenCount = 1;
 
@@ -1597,36 +2119,30 @@ script:
             const info = seenStyles.get(styleName);
             const token = `S${tokenCount++}`;
 
-            // Word accepts display names for p.style assignment
             styleCache.set(token, {
                 token,
-                styleId: styleName,      // Use display name (Word accepts this)
+                styleId: styleName,
                 styleName: styleName
             });
 
-            // Build Menu Line
             let category = "BODY";
             const sLower = styleName.toLowerCase();
             if (sLower.includes("heading") || sLower.includes("title")) category = "HEADING";
             else if (sLower.includes("list") || sLower.includes("number")) category = "LIST";
 
-            // Get sample text
             let sample = "Standard Style";
             if (info.index >= 0) {
                 const p = paragraphs.items[info.index];
                 try { sample = (p.text || "").substring(0, 30).replace(/\n/g, " "); } catch (e) {}
             }
 
-            // FIX: Use JSON.stringify to handle quotes and special characters safely
             const menuObj = { id: token, name: styleName, type: category, sample: sample };
             menuLines.push(JSON.stringify(menuObj));
         }
 
-        console.log(`[Vibe] Menu built with ${menuLines.length} items.`);
         return { styleCache, menu: menuLines.join("\n") };
     }
 
-    // 3. Parse Markdown to OXML Runs (for inline bold/italic)
     interface TextSegment {
         text: string;
         bold: boolean;
@@ -1635,19 +2151,15 @@ script:
 
     function parseMarkdownToSegments(content: string): TextSegment[] {
         const segments: TextSegment[] = [];
-        // Regex to match **bold**, *italic*, or plain text
         const regex = /(\*\*(.+?)\*\*)|(\*([^*]+?)\*)|([^*]+)/g;
         let match;
 
         while ((match = regex.exec(content)) !== null) {
             if (match[2]) {
-                // **bold**
                 segments.push({ text: match[2], bold: true, italic: false });
             } else if (match[4]) {
-                // *italic*
                 segments.push({ text: match[4], bold: false, italic: true });
             } else if (match[5]) {
-                // plain text
                 segments.push({ text: match[5], bold: false, italic: false });
             }
         }
@@ -1663,7 +2175,6 @@ script:
 
             const run = xmlDoc.createElementNS(WORD_NS, "w:r");
 
-            // Add formatting if needed
             if (seg.bold || seg.italic) {
                 const rPr = xmlDoc.createElementNS(WORD_NS, "w:rPr");
                 if (seg.bold) {
@@ -1688,9 +2199,7 @@ script:
         return runs;
     }
 
-    // 4. Insert Blocks (V10.1 - With Inline Formatting Support)
     async function insertBlocks(context: Word.RequestContext, blocks: any[], styleCache: Map<string, StyleToken>, insertLocation: Word.Paragraph, analysis?: any) {
-        console.log(`[Vibe] Inserting ${blocks.length} blocks (with inline formatting)...`);
 
         let lastInsert = insertLocation;
         let insertedCount = 0;
@@ -1699,14 +2208,11 @@ script:
         const serializer = new XMLSerializer();
         const WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 
-        // Track the initial location
         context.trackedObjects.add(lastInsert);
         
-        // V10.1 FIX: Fetch OXML from insertion location BEFORE Phase 1 to get document's actual font
         const insertLocationOxmlResult = insertLocation.getOoxml();
         await context.sync();
         
-        // Extract font info from insertion location (this has the REAL document font)
         let docRFonts: Node | null = null;
         let docSz: Node | null = null;
         let docSzCs: Node | null = null;
@@ -1722,7 +2228,6 @@ script:
                     docSz = rPr.getElementsByTagNameNS(WORD_NS, "sz")[0] || null;
                     docSzCs = rPr.getElementsByTagNameNS(WORD_NS, "szCs")[0] || null;
                     if (docRFonts) {
-                        console.log("[Vibe] Captured document font:", (docRFonts as Element).getAttribute("w:ascii"));
                     }
                 }
             }
@@ -1730,9 +2235,6 @@ script:
             console.warn("[Vibe] Could not extract font from insertion location:", e);
         }
 
-        // ===============================================
-        // PHASE 1: ANCHOR & STYLE (API)
-        // ===============================================
         const insertedParagraphs: Word.Paragraph[] = [];
         const blockMetadata: { styleToken: string, content: string, originalContent: string }[] = [];
 
@@ -1743,17 +2245,12 @@ script:
             if (!content) continue;
 
             const tokenData = styleCache.get(styleToken);
-            // CRUCIAL: Use Display Name (e.g., "Heading 1"), not Internal ID (e.g., "Heading1")
             const targetStyleName = tokenData ? tokenData.styleName : "Normal";
             const cleanContent = stripMarkdownFormatting(content);
 
-            // API Insert
             const newP = lastInsert.insertParagraph(cleanContent, "After");
-
-            // API Style
             newP.style = targetStyleName;
 
-            // Track for Phase 2
             context.trackedObjects.add(newP);
             insertedParagraphs.push(newP);
             blockMetadata.push({ styleToken, content: cleanContent, originalContent: content });
@@ -1762,24 +2259,15 @@ script:
             insertedCount++;
         }
 
-        // SYNC: Bake Structure & Style
         await context.sync();
-        console.log("[Vibe] Phase 1 Complete: Structure & Style baked.");
 
-        // ===============================================
-        // PHASE 2: THE REDLINE SWAP (OXML)
-        // ===============================================
-
-        // Batch Fetch OXML
         const oxmlResults: OfficeExtension.ClientResult<string>[] = [];
         for (const p of insertedParagraphs) {
             oxmlResults.push(p.getOoxml());
         }
 
-        // SYNC: Fetch OXML
         await context.sync();
 
-        // Process & Apply Redlines
         for (let i = 0; i < insertedParagraphs.length; i++) {
             const p = insertedParagraphs[i];
             const originalOxml = oxmlResults[i].value;
@@ -1789,31 +2277,20 @@ script:
                 const insId = Math.floor(Math.random() * 10000000).toString();
                 const date = new Date().toISOString();
 
-                // Parse OXML
                 const xmlDoc = parser.parseFromString(originalOxml, "text/xml");
                 const pNode = xmlDoc.getElementsByTagNameNS(WORD_NS, "p")[0] || xmlDoc.getElementsByTagName("w:p")[0];
 
                 if (pNode) {
-                    // STRICT MUTATION STRATEGY:
-                    // 1. Verify pPr exists (contains Style ID) - DO NOT MODIFY IT.
-                    // 2. Find all runs (<w:r>).
-                    // 3. Wrap them in <w:ins>.
-                    // 4. Ensure structure: <w:p> <w:pPr/> <w:ins><w:r>...</w:r></w:ins> </w:p>
-
                     let pPr = pNode.getElementsByTagNameNS(WORD_NS, "pPr")[0] || pNode.getElementsByTagName("w:pPr")[0];
 
-                    // SAFETY NET: If pPr is missing (e.g. Normal style sometimes omits it), create it if needed.
-                    // If the target style is NOT Normal, we MUST have a pPr with pStyle.
                     if (!pPr && meta.styleToken) {
                         const tokenData = styleCache.get(meta.styleToken);
                         if (tokenData && tokenData.styleId !== "Normal") {
-                            console.log(`[Vibe] Safety Net: Injecting missing pPr for ${tokenData.styleId}`);
                             pPr = xmlDoc.createElementNS(WORD_NS, "w:pPr");
                             const pStyle = xmlDoc.createElementNS(WORD_NS, "w:pStyle");
                             pStyle.setAttribute("w:val", tokenData.styleId);
                             pPr.appendChild(pStyle);
 
-                            // Insert pPr at the beginning of pNode
                             if (pNode.firstChild) {
                                 pNode.insertBefore(pPr, pNode.firstChild);
                             } else {
@@ -1822,35 +2299,26 @@ script:
                         }
                     }
 
-                    // V10.0 FIX: Remove direct font formatting (rFonts) from pPr to force style inheritance
-                    // This fixes the "Aptos" vs "Times New Roman" issue
                     if (pPr) {
                         const pPr_rPr = pPr.getElementsByTagNameNS(WORD_NS, "rPr")[0] || pPr.getElementsByTagName("w:rPr")[0];
                         if (pPr_rPr) {
                             const rFonts = pPr_rPr.getElementsByTagNameNS(WORD_NS, "rFonts")[0] || pPr_rPr.getElementsByTagName("w:rFonts")[0];
                             if (rFonts) {
-                                console.log("[Vibe] Removing direct font formatting to enforce style inheritance");
                                 pPr_rPr.removeChild(rFonts);
                             }
                         }
                     }
 
-                    // Log pPr presence for debugging
-                    console.log(`[Vibe Debug] pPr present: ${!!pPr}`);
 
-                    // Remove existing runs (plain text from Phase 1)
                     const existingRuns = Array.from(pNode.childNodes).filter(n => 
                         n.localName === "r" || n.nodeName.endsWith(":r")
                     );
                     existingRuns.forEach(run => pNode.removeChild(run));
 
-                    // V10.0: Create formatted runs from ORIGINAL content (with **bold** and *italic*)
                     const segments = parseMarkdownToSegments(meta.originalContent);
                     const formattedRuns = createFormattedRuns(xmlDoc, segments, WORD_NS);
 
-                    // V10.1 FIX: Apply document font (captured BEFORE Phase 1) to new runs
                     if (docRFonts || docSz) {
-                        console.log("[Vibe] Applying document font to new runs");
                         formattedRuns.forEach(run => {
                             let rPr = run.getElementsByTagNameNS(WORD_NS, "rPr")[0] as Element;
                             if (!rPr) {
@@ -1869,19 +2337,16 @@ script:
                         });
                     }
 
-                    // V10.0: Force bold on clause title if AI analysis says so
                     const isFirstBlock = (i === 0);
                     const shouldForceBold = isFirstBlock && analysis?.clauseStyle?.isBold && !meta.originalContent.includes('**');
 
                     if (shouldForceBold) {
-                        console.log(`[Vibe] Forcing bold on clause title block`);
                         formattedRuns.forEach(run => {
                             let rPr = run.getElementsByTagNameNS(WORD_NS, "rPr")[0] as Element;
                             if (!rPr) {
                                 rPr = xmlDoc.createElementNS(WORD_NS, "w:rPr");
                                 run.insertBefore(rPr, run.firstChild);
                             }
-                            // Check if <w:b> already exists
                             if (!rPr.getElementsByTagNameNS(WORD_NS, "b")[0]) {
                                 const b = xmlDoc.createElementNS(WORD_NS, "w:b");
                                 rPr.appendChild(b);
@@ -1889,54 +2354,39 @@ script:
                         });
                     }
 
-                    // Create ins wrapper and append formatted runs
                     const insNode = xmlDoc.createElementNS(WORD_NS, "w:ins");
                     insNode.setAttribute("w:id", insId);
                     insNode.setAttribute("w:author", getTrackChangeAuthor());
                     insNode.setAttribute("w:date", date);
 
-                    // Add formatted runs to insNode
                     formattedRuns.forEach(run => insNode.appendChild(run));
-
-                    // Append insNode to pNode (after pPr)
                     pNode.appendChild(insNode);
 
-                    console.log(`[Vibe] Formatted ${segments.length} segments for block ${i + 1}`);
                 }
 
-                // Clean Body (Remove sectPr if present)
                 const body = xmlDoc.getElementsByTagNameNS(WORD_NS, "body")[0] || xmlDoc.getElementsByTagName("w:body")[0];
                 if (body) {
                     const sectPr = body.getElementsByTagNameNS(WORD_NS, "sectPr")[0] || body.getElementsByTagName("w:sectPr")[0];
                     if (sectPr) body.removeChild(sectPr);
                 }
 
-                // Serialize the ENTIRE document (preserves package structure and namespaces)
                 const finalOxml = serializer.serializeToString(xmlDoc);
-
-                // Execute: Replace the paragraph (pPr is in the OXML, so style should be preserved)
                 p.insertOoxml(finalOxml, "Replace");
 
             } catch (e) {
                 console.error(`[Vibe] Redline Error for ${meta.styleToken}:`, e);
-                // No fallback needed as content is already there from Phase 1
             }
         }
 
-        // SYNC: Execute Redline Inserts
         await context.sync();
-        console.log("[Vibe] Phase 2 Complete: Redlines applied.");
 
-        // CLEANUP: Clear tracked objects
         for (const p of insertedParagraphs) {
             context.trackedObjects.remove(p);
         }
         context.trackedObjects.remove(insertLocation);
 
         await context.sync();
-        console.log(`[Vibe] Inserted ${insertedCount} blocks.`);
     }
-
 
     // ==========================================
     // UI COMPONENTS (React)
@@ -1944,16 +2394,15 @@ script:
 
     const fontStack = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
 
-    const Header = ({ onSettingsClick, onRefreshContext, cacheStatus, focusedSelection, processingStage }) =>
+    const Header = ({ onSettingsClick, onRefreshContext, cacheStatus, focusedSelection, processingStage, provider }) =>
         React.createElement("div", { style: { borderBottom: "1px solid #e5e5e5", background: "#fff" } },
-            // Main header row
             React.createElement("div", { style: { padding: "14px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" } },
                 React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "8px" } },
                     React.createElement("h2", { style: { margin: 0, fontSize: "14px", fontWeight: "600", color: "#111", fontFamily: fontStack } }, "Vibe Legal"),
                     React.createElement("span", { 
                         style: { fontSize: "11px", color: "#666", padding: "2px 6px", background: "#f0f0f0", borderRadius: "4px" },
-                        title: cacheStatus === "loaded" ? "Full document context loaded" : cacheStatus === "loading" ? "Loading context..." : "Direct mode (no cache)"
-                    }, cacheStatus === "loaded" ? "Context" : "")
+                        title: provider === "claude" ? "Using Claude (no caching)" : cacheStatus === "loaded" ? "Full document context loaded" : cacheStatus === "loading" ? "Loading context..." : "Direct mode (no cache)"
+                    }, provider === "claude" ? "Claude" : cacheStatus === "loaded" ? "Context" : "")
                 ),
                 React.createElement("div", { style: { display: "flex", gap: "8px" } },
                     React.createElement("button", { 
@@ -1964,7 +2413,6 @@ script:
                     React.createElement("button", { onClick: onSettingsClick, style: { background: "none", border: "none", cursor: "pointer", fontSize: "12px", opacity: 0.7, padding: "4px" } }, "Settings")
                 )
             ),
-            // Focus indicator bar (only visible when selection exists)
             focusedSelection && React.createElement("div", { 
                 style: { 
                     padding: "8px 16px", 
@@ -1982,7 +2430,6 @@ script:
                     focusedSelection.length > 40 ? focusedSelection.substring(0, 40) + "..." : focusedSelection
                 )
             ),
-            // Progress indicator bar (only visible during processing)
             processingStage && React.createElement("div", { 
                 style: { 
                     padding: "8px 16px", 
@@ -1994,31 +2441,82 @@ script:
             }, processingStage)
         );
 
-    const Settings = ({ apiKey, setApiKey, selectedModel, setSelectedModel, authorMode, setAuthorMode, customAuthor, setCustomAuthor, detectedAuthor, onBack }) => {
+    // ENHANCEMENT 2A: Settings with Provider Dropdown
+    const Settings = ({ 
+        provider, setProvider,
+        geminiApiKey, setGeminiApiKey,
+        claudeApiKey, setClaudeApiKey,
+        geminiModel, setGeminiModel,
+        claudeModel, setClaudeModel,
+        authorMode, setAuthorMode, 
+        customAuthor, setCustomAuthor, 
+        detectedAuthor, onBack 
+    }) => {
         const [status, setStatus] = React.useState("");
         const [models, setModels] = React.useState([]);
 
-        React.useEffect(() => { if (apiKey) handleSync(); }, []);
+        const currentApiKey = provider === "gemini" ? geminiApiKey : claudeApiKey;
+        const currentModel = provider === "gemini" ? geminiModel : claudeModel;
+
+        React.useEffect(() => { 
+            if (currentApiKey) handleSync(); 
+        }, [provider]);
 
         const handleSync = async () => {
             setStatus("Loading...");
             try {
-                const list = await fetchModelsFromGoogle(apiKey);
+                let list;
+                if (provider === "gemini") {
+                    list = await fetchModelsFromGoogle(geminiApiKey);
+                } else {
+                    list = await fetchModelsFromAnthropic(claudeApiKey);
+                }
                 setModels(list);
                 setStatus(list.length + " models found");
-                const currentExists = list.find((m) => m.name.replace("models/", "") === selectedModel);
-                if (!currentExists && list.length > 0) setSelectedModel(list[0].name.replace("models/", ""));
+                
+                // Ensure current model exists in list
+                const modelId = provider === "gemini" ? geminiModel : claudeModel;
+                const currentExists = list.find((m) => {
+                    const mName = m.name?.replace("models/", "") || m.name;
+                    return mName === modelId;
+                });
+                if (!currentExists && list.length > 0) {
+                    const newModel = list[0].name?.replace("models/", "") || list[0].name;
+                    if (provider === "gemini") {
+                        setGeminiModel(newModel);
+                    } else {
+                        setClaudeModel(newModel);
+                    }
+                }
             } catch (e) {
                 setStatus("Error: Check Key");
                 setModels([]);
             }
         };
 
+        const handleProviderChange = (newProvider) => {
+            setProvider(newProvider);
+            setModels([]); // Clear models
+            setStatus("Click Refresh to load models");
+        };
+
         const handleDone = () => {
-            localStorage.setItem("vibe_api_key", apiKey);
-            localStorage.setItem("vibe_model", selectedModel);
+            // ENHANCEMENT 2F: Store provider-specific settings
+            localStorage.setItem("vibe_provider", provider);
+            localStorage.setItem("vibe_api_key_gemini", geminiApiKey);
+            localStorage.setItem("vibe_api_key_claude", claudeApiKey);
+            localStorage.setItem("vibe_model_gemini", geminiModel);
+            localStorage.setItem("vibe_model_claude", claudeModel);
             localStorage.setItem("vibe_author_mode", authorMode);
             localStorage.setItem("vibe_custom_author", customAuthor);
+            
+            // Update global config
+            providerConfig.provider = provider;
+            providerConfig.geminiApiKey = geminiApiKey;
+            providerConfig.claudeApiKey = claudeApiKey;
+            providerConfig.geminiModel = geminiModel;
+            providerConfig.claudeModel = claudeModel;
+            
             authorSettings.mode = authorMode;
             authorSettings.customName = customAuthor;
             onBack();
@@ -2027,9 +2525,30 @@ script:
         return React.createElement("div", { style: { padding: "20px", background: "#f9f9f9", height: "100%", fontFamily: fontStack, fontSize: "13px" } },
             React.createElement("h3", { style: { marginTop: 0, fontSize: "14px", marginBottom: "20px" } }, "Settings"),
             
+            // ENHANCEMENT 2A: Provider Dropdown
             React.createElement("div", { style: { marginBottom: "20px" } },
-                React.createElement("label", { style: { display: "block", fontWeight: "600", marginBottom: "6px", color: "#444" } }, "API Key"),
-                React.createElement("input", { type: "password", value: apiKey, onChange: (e) => setApiKey(e.target.value), style: { width: "100%", padding: "10px", border: "1px solid #ddd", borderRadius: "6px", fontSize: "13px" }, placeholder: "Enter Gemini API Key" }),
+                React.createElement("label", { style: { display: "block", fontWeight: "600", marginBottom: "6px", color: "#444" } }, "Provider"),
+                React.createElement("select", { 
+                    value: provider, 
+                    onChange: (e) => handleProviderChange(e.target.value), 
+                    style: { width: "100%", padding: "10px", border: "1px solid #ddd", borderRadius: "6px", fontSize: "13px", background: "#fff" } 
+                },
+                    React.createElement("option", { value: "gemini" }, "Google Gemini"),
+                    React.createElement("option", { value: "claude" }, "Anthropic Claude")
+                ),
+            ),
+            
+            React.createElement("div", { style: { marginBottom: "20px" } },
+                React.createElement("label", { style: { display: "block", fontWeight: "600", marginBottom: "6px", color: "#444" } }, 
+                    provider === "gemini" ? "Gemini API Key" : "Claude API Key"
+                ),
+                React.createElement("input", { 
+                    type: "password", 
+                    value: currentApiKey, 
+                    onChange: (e) => provider === "gemini" ? setGeminiApiKey(e.target.value) : setClaudeApiKey(e.target.value), 
+                    style: { width: "100%", padding: "10px", border: "1px solid #ddd", borderRadius: "6px", fontSize: "13px" }, 
+                    placeholder: provider === "gemini" ? "Enter Gemini API Key" : "Enter Claude API Key"
+                }),
             ),
             
             React.createElement("div", { style: { marginBottom: "20px" } },
@@ -2037,10 +2556,14 @@ script:
                     React.createElement("label", { style: { fontWeight: "600", color: "#444" } }, "Model"),
                     React.createElement("button", { onClick: handleSync, style: { fontSize: "11px", background: "none", border: "none", color: "#000", textDecoration: "underline", cursor: "pointer" } }, "Refresh"),
                 ),
-                React.createElement("select", { value: selectedModel, onChange: (e) => setSelectedModel(e.target.value), style: { width: "100%", padding: "10px", border: "1px solid #ddd", borderRadius: "6px", fontSize: "13px", background: "#fff" } },
+                React.createElement("select", { 
+                    value: currentModel, 
+                    onChange: (e) => provider === "gemini" ? setGeminiModel(e.target.value) : setClaudeModel(e.target.value), 
+                    style: { width: "100%", padding: "10px", border: "1px solid #ddd", borderRadius: "6px", fontSize: "13px", background: "#fff" } 
+                },
                     models.length > 0
                         ? models.map((m) => React.createElement("option", { key: m.name, value: m.name.replace("models/", "") }, m.displayName || m.name))
-                        : React.createElement("option", { value: selectedModel }, selectedModel || "Default"),
+                        : React.createElement("option", { value: currentModel }, currentModel || "Default"),
                 ),
                 React.createElement("div", { style: { fontSize: "11px", color: "#666", marginTop: "6px" } }, status),
             ),
@@ -2103,37 +2626,52 @@ script:
         );
 
     // ==========================================
-    // MAIN APP
+    // MAIN APP (with Provider Support)
     // ==========================================
 
     const App = () => {
         const [view, setView] = React.useState("main");
-        const [apiKey, setApiKey] = React.useState("");
-        const [selectedModel, setSelectedModel] = React.useState("gemini-2.0-flash-exp");
+        
+        // ENHANCEMENT 2F: Provider-specific state
+        const [provider, setProvider] = React.useState<AIProvider>("gemini");
+        const [geminiApiKey, setGeminiApiKey] = React.useState("");
+        const [claudeApiKey, setClaudeApiKey] = React.useState("");
+        const [geminiModel, setGeminiModel] = React.useState("gemini-2.0-flash-exp");
+        const [claudeModel, setClaudeModel] = React.useState("claude-sonnet-4-20250514");
+        
         const [messages, setMessages] = React.useState([{ role: "bot", content: "**Vibe Legal** ready. Select text and give an instruction, or ask questions about your document." }]);
         const [inputValue, setInputValue] = React.useState("");
         const [isProcessing, setIsProcessing] = React.useState(false);
         const [cacheStatus, setCacheStatus] = React.useState<"loaded" | "loading" | "direct">("direct");
         
-        // Progress indicator state
         const [processingStage, setProcessingStage] = React.useState<string>("");
-        
-        // Focus mode state (selected text)
         const [focusedSelection, setFocusedSelection] = React.useState<string>("");
         
-        // Author attribution state
         const [authorMode, setAuthorMode] = React.useState<AuthorMode>("auto");
         const [customAuthor, setCustomAuthor] = React.useState("");
         const [detectedAuthor, setDetectedAuthor] = React.useState<string | null>(null);
 
+        // ENHANCEMENT 2F: Load provider-specific settings
         React.useEffect(() => {
-            const k = localStorage.getItem("vibe_api_key");
-            const m = localStorage.getItem("vibe_model");
+            const p = localStorage.getItem("vibe_provider") as AIProvider;
+            const gKey = localStorage.getItem("vibe_api_key_gemini");
+            const cKey = localStorage.getItem("vibe_api_key_claude");
+            const gModel = localStorage.getItem("vibe_model_gemini");
+            const cModel = localStorage.getItem("vibe_model_claude");
             const am = localStorage.getItem("vibe_author_mode") as AuthorMode;
             const ca = localStorage.getItem("vibe_custom_author");
             
-            if (k) setApiKey(k);
-            if (m) setSelectedModel(m);
+            // Backwards compatibility: check old key format
+            const oldKey = localStorage.getItem("vibe_api_key");
+            const oldModel = localStorage.getItem("vibe_model");
+            
+            if (p) setProvider(p);
+            if (gKey) setGeminiApiKey(gKey);
+            else if (oldKey) setGeminiApiKey(oldKey);
+            if (cKey) setClaudeApiKey(cKey);
+            if (gModel) setGeminiModel(gModel);
+            else if (oldModel) setGeminiModel(oldModel);
+            if (cModel) setClaudeModel(cModel);
             if (am) {
                 setAuthorMode(am);
                 authorSettings.mode = am;
@@ -2142,9 +2680,15 @@ script:
                 setCustomAuthor(ca);
                 authorSettings.customName = ca;
             }
+            
+            // Update global config
+            providerConfig.provider = p || "gemini";
+            providerConfig.geminiApiKey = gKey || oldKey || "";
+            providerConfig.claudeApiKey = cKey || "";
+            providerConfig.geminiModel = gModel || oldModel || "gemini-2.0-flash-exp";
+            providerConfig.claudeModel = cModel || "claude-sonnet-4-20250514";
         }, []);
 
-        // Update detected author when it changes in global state
         React.useEffect(() => {
             const checkAuthor = setInterval(() => {
                 if (authorSettings.detectedAuthor !== detectedAuthor) {
@@ -2154,7 +2698,6 @@ script:
             return () => clearInterval(checkAuthor);
         }, [detectedAuthor]);
 
-        // NEW: Update cache status periodically
         React.useEffect(() => {
             const interval = setInterval(() => {
                 setCacheStatus(getCacheStatus());
@@ -2162,8 +2705,8 @@ script:
             return () => clearInterval(interval);
         }, []);
 
-        // NEW: Manual refresh handler
         const handleRefreshContext = async () => {
+            const apiKey = getCurrentApiKey();
             if (!apiKey) return;
             setIsProcessing(true);
             setMessages(p => [...p, { role: "bot", content: "Refreshing document context..." }]);
@@ -2174,7 +2717,7 @@ script:
                     body.load("text");
                     await context.sync();
                     
-                    const result = await refreshCache(apiKey, selectedModel, body.text);
+                    const result = await refreshCache(apiKey, getCurrentModel(), body.text);
                     setCacheStatus(getCacheStatus());
                     
                     if (result.error) {
@@ -2192,7 +2735,9 @@ script:
             }
         };
 
+        // ENHANCEMENT 2D: Updated handleAction with provider routing
         const handleAction = async () => {
+            const apiKey = getCurrentApiKey();
             if (!apiKey) return setView("settings");
             if (!inputValue.trim()) return;
 
@@ -2204,18 +2749,13 @@ script:
 
             try {
                 await Word.run(async (context) => {
-                    // FIX: Declare tracked items at the top scope of Word.run
                     const trackedItems = [];
 
                     try {
-                        // NEW: Detect document author on first action (if not already detected)
                         if (!authorSettings.detectedAuthor) {
                             await detectDocumentAuthor(context);
                         }
 
-                        // ==========================================
-                        // FOCUS MODE: Check for text selection
-                        // ==========================================
                         const selection = context.document.getSelection();
                         selection.load("text");
                         await context.sync();
@@ -2224,23 +2764,16 @@ script:
                         const hasFocus = rawSelectedText.length > 0;
                         
                         if (hasFocus) {
-                            console.log(`[Vibe] Focus Mode: ${rawSelectedText.length} chars selected`);
                             
-                            // Get accepted text (strips track changes deleted text, keeps inserted)
                             const { text: acceptedSelectionText, oxml: selectionOxml } = await getAcceptedSelectionText(context);
                             
                             setFocusedSelection(acceptedSelectionText.substring(0, 100));
-                            console.log(`[Vibe] Accepted text: ${acceptedSelectionText.length} chars`);
                             
-                            // FOCUS MODE: Fast path for selected text operations
                             if (isQuestionIntent(currentInput)) {
-                                // Question about selection - answer based on just the selected clause
                                 setProcessingStage("Analyzing selection...");
                                 
                                 try {
-                                    const answer = await callGeminiQuestion(
-                                        apiKey,
-                                        selectedModel,
+                                    const answer = await callQuestion(
                                         currentInput + "\n\n[User is asking about this specific clause: \"" + acceptedSelectionText.substring(0, 2000) + "\"]",
                                         acceptedSelectionText,
                                         cacheState.changelog,
@@ -2256,13 +2789,10 @@ script:
                                 return;
                             }
                             
-                            // Modification on selection - skip router, call redline directly
                             setProcessingStage("Generating changes...");
                             
                             try {
-                                const newText = await callGeminiRedline(
-                                    apiKey,
-                                    selectedModel,
+                                const newText = await callRedline(
                                     currentInput,
                                     acceptedSelectionText,
                                     null
@@ -2271,7 +2801,6 @@ script:
                                 if (newText !== acceptedSelectionText) {
                                     setProcessingStage("Applying changes...");
                                     
-                                    // Apply redline to the original OXML
                                     const redlineResult = applyRedlineToOxml(selectionOxml, acceptedSelectionText, newText);
                                     
                                     if (redlineResult.hasChanges) {
@@ -2296,31 +2825,33 @@ script:
                             return;
                         }
                         
-                        // NO SELECTION: Full document mode
                         setFocusedSelection("");
 
-                        // 1. Load document
                         const body = context.document.body;
                         body.load("text");
                         const paragraphs = context.document.body.paragraphs;
                         paragraphs.load("text, style, styleId, isListItem");
                         await context.sync();
 
-                        // Get full document text for cache
                         const fullDocumentText = body.text;
 
                         // ==========================================
-                        // QUESTION DETECTION BRANCH
+                        // COMPLEX TRANSFORMATION DETECTION
                         // ==========================================
+                        // Instead of full-document rewrite + diff (which corrupts output),
+                        // we pass a flag to the router for terminology-aware routing
+                        const isComplexTransform = isHolisticTransformation(currentInput);
+                        if (isComplexTransform) {
+                            setMessages(p => [...p, { role: "bot", content: "Complex transformation detected. Using terminology-aware mode for consistent changes..." }]);
+                        }
+
                         if (isQuestionIntent(currentInput)) {
-                            console.log("[Vibe] Question detected - using hybrid question handler");
                             setProcessingStage("Analyzing document...");
                             
-                            // For short docs, we don't need cache
-                            // For long docs, ensure cache exists
+                            // ENHANCEMENT 2E: Skip cache for Claude
                             let cacheId: string | null = null;
-                            if (fullDocumentText.length >= CACHE_CONFIG.minCacheChars) {
-                                const cacheResult = await ensureCache(apiKey, selectedModel, fullDocumentText);
+                            if (providerConfig.provider === "gemini" && fullDocumentText.length >= CACHE_CONFIG.minCacheChars) {
+                                const cacheResult = await ensureCache(getCurrentApiKey(), getCurrentModel(), fullDocumentText);
                                 cacheId = cacheResult.cacheId;
                                 if (cacheResult.error) {
                                     console.warn("[Vibe] Cache unavailable for question:", cacheResult.error);
@@ -2328,9 +2859,7 @@ script:
                             }
                             
                             try {
-                                const answer = await callGeminiQuestion(
-                                    apiKey,
-                                    selectedModel,
+                                const answer = await callQuestion(
                                     currentInput,
                                     fullDocumentText,
                                     cacheState.changelog,
@@ -2342,34 +2871,31 @@ script:
                                 setMessages(p => [...p, { role: "bot", content: "Failed to analyze: " + (e as Error).message }]);
                             }
                             
-                            return; // Done - skip router flow
+                            return;
                         }
 
-                        // ==========================================
-                        // CHANGE REQUEST FLOW (existing logic)
-                        // ==========================================
-                        
-                        // NEW: Check if cache refresh needed BEFORE this call
-                        if (shouldRefreshCache()) {
-                            const refreshResult = await refreshCache(apiKey, selectedModel, fullDocumentText);
+                        // ENHANCEMENT 2E: Skip cache refresh for Claude
+                        if (providerConfig.provider === "gemini" && shouldRefreshCache()) {
+                            const refreshResult = await refreshCache(getCurrentApiKey(), getCurrentModel(), fullDocumentText);
                             if (refreshResult.error) {
                                 setMessages(p => [...p, { role: "bot", content: `Note: ${refreshResult.error}` }]);
                             }
                         }
 
-                        // NEW: Ensure cache exists (creates on first call, reuses after)
-                        const cacheResult = await ensureCache(apiKey, selectedModel, fullDocumentText);
-                        const cacheId = cacheResult.cacheId;
-                        
-                        // Notify user if cache not available
-                        if (cacheResult.error) {
-                            setMessages(p => [...p, { role: "bot", content: `Note: ${cacheResult.error}` }]);
+                        // ENHANCEMENT 2E: Skip cache for Claude
+                        let cacheId: string | null = null;
+                        if (providerConfig.provider === "gemini") {
+                            const cacheResult = await ensureCache(getCurrentApiKey(), getCurrentModel(), fullDocumentText);
+                            cacheId = cacheResult.cacheId;
+                            
+                            if (cacheResult.error) {
+                                setMessages(p => [...p, { role: "bot", content: `Note: ${cacheResult.error}` }]);
+                            }
                         }
 
                         const mapLines = [];
                         const lookup = {};
 
-                        // Phase 2: Conditionally load listItem for list paragraphs
                         for (let i = 0; i < paragraphs.items.length; i++) {
                             const p = paragraphs.items[i];
                             if (p.isListItem) {
@@ -2383,20 +2909,16 @@ script:
                             const id = i + 1;
                             lookup[id] = p;
 
-                            // FIX: Track object to prevent invalidation during sync() in MODIFY actions
                             context.trackedObjects.add(p);
                             trackedItems.push(p);
 
-                            // Truncate for map to save tokens
                             const text = p.text.substring(0, 150).replace(/\n/g, " ");
 
-                            // ENHANCED MAP: Add Style and List Info
                             let meta = `{Style: ${p.styleId}}`;
                             if (p.isListItem) {
                                 try {
                                     meta += ` {List: Lvl ${p.listItem.level}}`;
                                 } catch (e) {
-                                    // Fallback if listItem not loaded
                                     meta += ` {List: true}`;
                                 }
                             }
@@ -2406,68 +2928,55 @@ script:
                             }
                         }
 
-                        // FIX: Sync immediately to register tracked objects with the host
-                        console.log(`[Vibe] Tracking ${trackedItems.length} paragraphs...`);
                         await context.sync();
 
                         const documentMap = mapLines.join("\n");
-                        console.log("[Vibe] Map generated:", mapLines.length, "lines");
 
-                        // v10.0: Generate Style Menu (Menu/Dish Pattern)
                         const { styleCache, menu: styleMenu } = await generateStyleMenuAndCache(context, paragraphs);
-                        console.log("[Vibe] Style Cache built:", styleCache.size, "tokens");
-                        console.log("[Vibe] Style Menu:\n", styleMenu);
 
-                        // v10.0: Capture Document Snapshot (AI-Driven Analysis)
                         const snapshot = await captureDocumentSnapshot(context, paragraphs, styleCache);
-                        console.log("[Vibe] Document Snapshot captured:", snapshot.paragraphs.length, "paragraphs");
 
                         setProcessingStage("Generating response...");
                         
-                        // 2. Call Router with Style Menu, Snapshot, AND cacheId
-                        const routerResponse = await callGeminiRouter(
-                            apiKey, selectedModel, currentInput, styleMenu, snapshot, cacheId
+                        // ENHANCEMENT 2D + 3: Use unified router with complex transformation support
+                        const routerResponse = await callRouter(
+                            currentInput, styleMenu, snapshot, cacheId,
+                            isComplexTransform, fullDocumentText
                         );
-                        console.log("[Vibe] Router Intent:", routerResponse.intent);
+                        
+                        // Log terminology if present (for complex transformations)
+                        if (routerResponse.terminology) {
+                        }
 
-                        // 3. Handle Answer
                         if (routerResponse.answer) {
                             setMessages((p) => [...p, { role: "bot", content: routerResponse.answer }]);
                         }
 
-                        // 4. Handle Actions
                         if (routerResponse.actions && routerResponse.actions.length > 0) {
                             const actions = routerResponse.actions;
 
-                            // Split actions by type
                             const insertActions = actions.filter(a => a.type === "INSERT");
                             const modifyActions = actions.filter(a => a.type === "MODIFY");
 
-                            // PHASE 1: Process INSERTs (Sequential to preserve order)
                             if (insertActions.length > 0) {
-                                console.log(`[Vibe] Processing ${insertActions.length} INSERT actions sequentially...`);
                                 for (const action of insertActions) {
                                     const locId = action.location_id;
                                     const refP = lookup[locId];
 
                                     if (refP) {
                                         try {
-                                            // v10.0: Block-Based Insertion (Menu/Dish Pattern)
                                             if (action.blocks && Array.isArray(action.blocks)) {
                                                 await insertBlocks(context, action.blocks, styleCache, refP, routerResponse.analysis);
                                                 
-                                                // NEW: Log the change
                                                 const contentPreview = action.blocks.map(b => b.content).join(" ").substring(0, 200);
                                                 logChange("INSERT", `Added ${action.blocks.length} block(s) after paragraph ${locId}`, contentPreview);
                                                 setMessages((p) => [...p, { role: "bot", content: `Inserted ${action.blocks.length} block(s).` }]);
                                             } else {
-                                                // Fallback for plain text (no blocks)
                                                 console.warn("[Vibe] No blocks found in INSERT content. Using plain text.");
                                                 refP.insertParagraph(stripMarkdownFormatting(action.content || ""), Word.InsertLocation.after);
                                                 await context.sync();
                                                 setMessages((p) => [...p, { role: "bot", content: `Inserted plain text.` }]);
                                                 
-                                                // NEW: Log the change
                                                 logChange("INSERT", `Added text after paragraph ${locId}`, action.content?.substring(0, 200));
                                             }
                                         } catch (e) {
@@ -2480,18 +2989,17 @@ script:
                                 }
                             }
 
-                            // PHASE 2: Process MODIFYs (Parallel)
                             if (modifyActions.length > 0) {
-                                console.log(`[Vibe] Processing ${modifyActions.length} MODIFY actions in parallel...`);
+                                // ENHANCEMENT 3: Process sequentially for complex transformations
+                                const processingMode = isComplexTransform ? "sequentially" : "in parallel";
+                                
                                 const modifyTasks = [];
 
-                                // Step 2a: Pre-fetch Data (Batch Load)
                                 for (const action of modifyActions) {
                                     const targetId = action.target_id;
                                     const targetP = lookup[targetId];
                                     if (targetP) {
                                         targetP.load("text");
-                                        // We need OXML to apply redlines correctly
                                         const oxml = targetP.getOoxml();
                                         modifyTasks.push({ action, targetP, oxml });
                                     } else {
@@ -2500,53 +3008,96 @@ script:
                                 }
 
                                 if (modifyTasks.length > 0) {
-                                    await context.sync(); // Sync ONCE for all reads
+                                    await context.sync();
 
-                                    // Step 2b: Parallel Generation
-                                    // MODIFIED: Pass cacheId to redline calls
-                                    const results = await Promise.all(modifyTasks.map(async (task) => {
-                                        try {
-                                            const newText = await callGeminiRedline(
-                                                apiKey, selectedModel, task.action.instruction, task.targetP.text, cacheId
-                                            );
-                                            return { ...task, newText, success: true };
-                                        } catch (e) {
-                                            console.error(`[Vibe] Redline failed for ${task.action.target_id}`, e);
-                                            return { ...task, error: e.message, success: false };
-                                        }
-                                    }));
-
-                                    // Step 2c: Apply Changes (Batch Write)
-                                    let changesApplied = 0;
-                                    for (const res of results) {
-                                        if (res.success) {
-                                            const redlineResult = applyRedlineToOxml(res.oxml.value, res.targetP.text, res.newText);
-                                            if (redlineResult.hasChanges) {
-                                                res.targetP.insertOoxml(redlineResult.oxml, Word.InsertLocation.replace);
-                                                setMessages((p) => [...p, { role: "bot", content: `Modified section.` }]);
-                                                changesApplied++;
-                                                
-                                                // NEW: Log the change
-                                                logChange("MODIFY", `Modified paragraph ${res.action.target_id}: ${res.action.instruction.substring(0, 100)}`);
-                                            } else {
-                                                setMessages((p) => [...p, { role: "bot", content: `No changes needed.` }]);
+                                    let results: any[] = [];
+                                    
+                                    if (isComplexTransform) {
+                                        // SEQUENTIAL processing for complex transformations
+                                        // This ensures each change is applied cleanly before the next
+                                        
+                                        // Build terminology context from router response
+                                        let terminologyContext = "";
+                                        if (routerResponse.terminology) {
+                                            const t = routerResponse.terminology;
+                                            terminologyContext = `TRANSFORMATION: ${t.notes || 'Complex transformation'}. `;
+                                            if (t.find_replace && t.find_replace.length > 0) {
+                                                terminologyContext += "REPLACEMENTS: " + t.find_replace.map(
+                                                    (fr: any) => `"${fr.find}" -> "${fr.replace}"`
+                                                ).join(", ");
                                             }
-                                        } else {
-                                            setMessages((p) => [...p, { role: "bot", content: `Failed to modify: ${res.error}` }]);
                                         }
-                                    }
+                                        
+                                        for (const task of modifyTasks) {
+                                            try {
+                                                // Enrich instruction with terminology context for complex transformations
+                                                let enrichedInstruction = task.action.instruction;
+                                                if (terminologyContext) {
+                                                    enrichedInstruction = `${terminologyContext}\n\nINSTRUCTION: ${task.action.instruction}`;
+                                                }
+                                                
+                                                const newText = await callRedline(
+                                                    enrichedInstruction, task.targetP.text, cacheId
+                                                );
+                                                results.push({ ...task, newText, success: true });
+                                                
+                                                // Apply immediately for sequential processing
+                                                const redlineResult = applyRedlineToOxml(task.oxml.value, task.targetP.text, newText);
+                                                if (redlineResult.hasChanges) {
+                                                    task.targetP.insertOoxml(redlineResult.oxml, Word.InsertLocation.replace);
+                                                    await context.sync();
+                                                    
+                                                    logChange("MODIFY", `Modified paragraph ${task.action.target_id}: ${task.action.instruction.substring(0, 100)}`);
+                                                    setMessages((p) => [...p, { role: "bot", content: `Modified: ${task.action.description || 'section'}` }]);
+                                                }
+                                            } catch (e) {
+                                                console.error(`[Vibe] Redline failed for ${task.action.target_id}`, e);
+                                                results.push({ ...task, error: e.message, success: false });
+                                                setMessages((p) => [...p, { role: "bot", content: `Failed to modify: ${e.message}` }]);
+                                            }
+                                        }
+                                        
+                                    } else {
+                                        // PARALLEL processing for standard modifications
+                                        results = await Promise.all(modifyTasks.map(async (task) => {
+                                            try {
+                                                const newText = await callRedline(
+                                                    task.action.instruction, task.targetP.text, cacheId
+                                                );
+                                                return { ...task, newText, success: true };
+                                            } catch (e) {
+                                                console.error(`[Vibe] Redline failed for ${task.action.target_id}`, e);
+                                                return { ...task, error: e.message, success: false };
+                                            }
+                                        }));
 
-                                    // Step 2d: Final Sync
-                                    if (changesApplied > 0) {
-                                        await context.sync();
+                                        let changesApplied = 0;
+                                        for (const res of results) {
+                                            if (res.success) {
+                                                const redlineResult = applyRedlineToOxml(res.oxml.value, res.targetP.text, res.newText);
+                                                if (redlineResult.hasChanges) {
+                                                    res.targetP.insertOoxml(redlineResult.oxml, Word.InsertLocation.replace);
+                                                    setMessages((p) => [...p, { role: "bot", content: `Modified section.` }]);
+                                                    changesApplied++;
+                                                    
+                                                    logChange("MODIFY", `Modified paragraph ${res.action.target_id}: ${res.action.instruction.substring(0, 100)}`);
+                                                } else {
+                                                    setMessages((p) => [...p, { role: "bot", content: `No changes needed.` }]);
+                                                }
+                                            } else {
+                                                setMessages((p) => [...p, { role: "bot", content: `Failed to modify: ${res.error}` }]);
+                                            }
+                                        }
+
+                                        if (changesApplied > 0) {
+                                            await context.sync();
+                                        }
                                     }
                                 }
                             }
                         }
                     } finally {
-                        // Cleanup tracked objects (Guaranteed Execution)
                         if (trackedItems && trackedItems.length > 0) {
-                            console.log(`[Vibe] Cleaning up ${trackedItems.length} tracked objects...`);
                             trackedItems.forEach(p => context.trackedObjects.remove(p));
                             await context.sync();
                         }
@@ -2564,10 +3115,16 @@ script:
 
         if (view === "settings") {
             return React.createElement(Settings, {
-                apiKey,
-                setApiKey,
-                selectedModel,
-                setSelectedModel,
+                provider,
+                setProvider,
+                geminiApiKey,
+                setGeminiApiKey,
+                claudeApiKey,
+                setClaudeApiKey,
+                geminiModel,
+                setGeminiModel,
+                claudeModel,
+                setClaudeModel,
                 authorMode,
                 setAuthorMode,
                 customAuthor,
@@ -2578,7 +3135,14 @@ script:
         }
 
         return React.createElement("div", { style: { display: "flex", flexDirection: "column", height: "100vh", background: "#fff" } },
-            React.createElement(Header, { onSettingsClick: () => setView("settings"), onRefreshContext: handleRefreshContext, cacheStatus: cacheStatus, focusedSelection: focusedSelection, processingStage: processingStage }),
+            React.createElement(Header, { 
+                onSettingsClick: () => setView("settings"), 
+                onRefreshContext: handleRefreshContext, 
+                cacheStatus: cacheStatus, 
+                focusedSelection: focusedSelection, 
+                processingStage: processingStage,
+                provider: provider
+            }),
             React.createElement(Chat, { messages: messages }),
             React.createElement(InputArea, { value: inputValue, onChange: setInputValue, onSend: handleAction, disabled: isProcessing })
         );
