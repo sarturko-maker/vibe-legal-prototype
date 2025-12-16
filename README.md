@@ -48,3 +48,11 @@ Vibe Legal is designed to run inside **Script Lab**, a Microsoft prototyping too
 ## Contributing & License
 This project is open source under the **GNU General Public License v3**.
 We welcome contributions! There is a lot of work to be done to make this a reliable tool for legal professionals.
+
+## Acknowledgments
+
+Vibe Legal is built on the shoulders of giants. We gratefully acknowledge the following open-source projects and platforms that make this client-side engine possible:
+
+* **[diff-match-patch](https://github.com/google/diff-match-patch)** (Google): The core algorithm used for our text comparison and semantic cleanup engine.
+* **[React](https://react.dev/)** (Meta): The library powering our reactive user interface and state management.
+* **[Office.js](https://learn.microsoft.com/en-us/office/dev/add-ins/overview/office-add-ins)** (Microsoft): The client-side API that enables secure, direct manipulation of Word documents without a backend server.
