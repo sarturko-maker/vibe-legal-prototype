@@ -1,14 +1,14 @@
-# Vibe Legal (MVP 1.1 Prototype)
-**Serverless AI Contract Redlining Engine - Experimental Build**
+# Vibe Legal (v0.1 Alpha)
+**Serverless AI Contract Redlining Engine - Research Prototype**
 
-> **⚠️ WORK IN PROGRESS:**
-> This project is an early-stage **prototype**. While the core engine works, it is experimental software. There is a lot of work to do, and bugs should be expected. We are building this in public to explore what is possible with Client-Side AI.
+> **⚠️ EXPERIMENTAL SOFTWARE:**
+> This is a **Proof of Concept (PoC)**, not a finished product. It is designed to demonstrate *what is possible* with client-side AI, but it currently contains known bugs and limitations. Use purely for testing and development.
 
 ---
 
 > ### 🛑 CRITICAL LEGAL DISCLAIMER - READ BEFORE USING
 >
-> **THIS SOFTWARE IS AN ENGINEERING PROTOTYPE, NOT A LAWYER.**
+> **THIS SOFTWARE IS AN ENGINEERING EXPERIMENT, NOT A LAWYER.**
 >
 > 1.  **NO LEGAL ADVICE:** Vibe Legal uses Large Language Models (LLMs) which can hallucinate, omit critical legal terms, or misinterpret instructions. **NEVER** rely on this tool for legal advice.
 > 2.  **USER RESPONSIBILITY:** You are solely responsible for verifying every single change made by this software. By using this tool, you agree that you are competent to review the output and accept full liability for its use.
