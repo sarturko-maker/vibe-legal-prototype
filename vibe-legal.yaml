@@ -1,0 +1,2643 @@
+name: Vibe Legal MVP 1.0
+description: AI-Powered Contract Redlining Engine - Production Ready
+host: WORD
+api_set: {}
+script:
+  content: |
+    /**
+     * VIBE LEGAL - AI-Powered Contract Redlining Engine
+     * 
+     * A client-side TypeScript engine for Microsoft Word that uses LLMs
+     * to surgically redline documents while preserving OXML structure.
+     * 
+     * https://github.com/sarturko-maker/vibe-legal
+     * GNU General Public License
+     */
+
+    declare var diff_match_patch: any;
+    declare var React: any;
+    declare var ReactDOM: any;
+
+    // ==========================================
+    // TRACK CHANGES AUTHOR SYSTEM
+    // ==========================================
+
+    type AuthorMode = "auto" | "vibe" | "custom";
+
+    interface AuthorSettings {
+        mode: AuthorMode;
+        customName: string;
+        detectedAuthor: string | null;
+    }
+
+    let authorSettings: AuthorSettings = {
+        mode: "auto",
+        customName: "",
+        detectedAuthor: null
+    };
+
+    function getTrackChangeAuthor(): string {
+        switch (authorSettings.mode) {
+            case "auto":
+                return authorSettings.detectedAuthor || "Vibe AI";
+            case "vibe":
+                return "Vibe AI";
+            case "custom":
+                return authorSettings.customName.trim() || "Vibe AI";
+            default:
+                return "Vibe AI";
+        }
+    }
+
+    async function detectDocumentAuthor(context: Word.RequestContext): Promise<string | null> {
+        try {
+            const properties = context.document.properties;
+            properties.load("lastAuthor, author");
+            await context.sync();
+            
+            const detected = properties.lastAuthor?.trim() || properties.author?.trim() || null;
+            
+            if (detected) {
+                console.log(`[Vibe] Detected document author: ${detected}`);
+                authorSettings.detectedAuthor = detected;
+            }
+            
+            return detected;
+        } catch (e) {
+            console.warn("[Vibe] Could not read document author:", e);
+            return null;
+        }
+    }
+
+    // ==========================================
+    // CONTEXT CACHING SYSTEM - Configuration
+    // ==========================================
+
+    // Cache Configuration
+    const CACHE_CONFIG = {
+        maxChangelogEntries: 10,
+        maxChangelogChars: 5000,
+        cacheTTL: 3600000,
+        minCacheChars: 10000
+    };
+
+    // Cache State Interfaces
+    interface ChangeEntry {
+        type: "INSERT" | "MODIFY";
+        description: string;
+        content?: string;
+        timestamp: Date;
+    }
+
+    interface CacheState {
+        cacheId: string | null;
+        createdAt: Date | null;
+        changelog: ChangeEntry[];
+    }
+
+    // Global cache state
+    let cacheState: CacheState = {
+        cacheId: null,
+        createdAt: null,
+        changelog: []
+    };
+
+
+    // Removes markdown formatting from AI responses
+    function stripMarkdownFormatting(text: string): string {
+        if (!text) return "";
+        return text
+            .replace(/\*\*(.+?)\*\*/g, "$1")
+            .replace(/\*(.+?)\*/g, "$1")
+            .replace(/__(.+?)__/g, "$1")
+            .replace(/`(.+?)`/g, "$1")
+            .replace(/^#+\s*/gm, "")
+            .replace(/^[-*]\s+/gm, "")
+            .replace(/\n\n+/g, "\n")
+            .trim();
+    }
+
+    interface TextSpan {
+        charStart: number;
+        charEnd: number;
+        textElement: Element;
+        runElement: Element;
+        paragraph: Element;
+        container: Element;
+        rPr: Element | null;
+    }
+
+    function applyRedlineToOxml(
+        oxml: string,
+        originalText: string,
+        modifiedText: string
+    ): { oxml: string; hasChanges: boolean } {
+        const parser = new DOMParser();
+        const serializer = new XMLSerializer();
+
+        let xmlDoc;
+        try {
+            xmlDoc = parser.parseFromString(oxml, "text/xml");
+        } catch (e) {
+            console.error("[Engine] Failed to parse OXML:", e);
+            return { oxml, hasChanges: false };
+        }
+
+        const cleanModifiedText = sanitizeAiResponse(modifiedText);
+
+        if (cleanModifiedText.trim() === originalText.trim()) {
+            return { oxml, hasChanges: false };
+        }
+
+        // Check for tables
+        const tables = xmlDoc.getElementsByTagName("w:tbl");
+        const hasTables = tables.length > 0;
+
+        if (hasTables) {
+            return applySurgicalMode(xmlDoc, originalText, cleanModifiedText, serializer);
+        } else {
+            return applyReconstructionMode(xmlDoc, originalText, cleanModifiedText, serializer);
+        }
+    }
+
+    // SURGICAL MODE (for tables - preserves structure)
+    function applySurgicalMode(xmlDoc, originalText, modifiedText, serializer) {
+        let fullText = "";
+        const textSpans: TextSpan[] = [];
+
+        const allParagraphs = Array.from(xmlDoc.getElementsByTagName("w:p"));
+
+        allParagraphs.forEach((p: Element, pIndex) => {
+            const container = p.parentNode as Element;
+
+            Array.from(p.childNodes).forEach(child => {
+                if (child.nodeName === "w:r") {
+                    const r = child as Element;
+                    const rPr = r.getElementsByTagName("w:rPr")[0] || null;
+                    Array.from(r.childNodes).forEach(rc => {
+                        if (rc.nodeName === "w:t") {
+                            const t = rc as Element;
+                            const text = t.textContent || "";
+                            if (text.length > 0) {
+                                textSpans.push({ charStart: fullText.length, charEnd: fullText.length + text.length, textElement: t, runElement: r, paragraph: p, container, rPr });
+                                fullText += text;
+                            }
+                        }
+                    });
+                } else if (child.nodeName === "w:hyperlink") {
+                    Array.from(child.childNodes).forEach(hc => {
+                        if (hc.nodeName === "w:r") {
+                            const r = hc as Element;
+                            const rPr = r.getElementsByTagName("w:rPr")[0] || null;
+                            Array.from(r.childNodes).forEach(rc => {
+                                if (rc.nodeName === "w:t") {
+                                    const t = rc as Element;
+                                    const text = t.textContent || "";
+                                    if (text.length > 0) {
+                                        textSpans.push({ charStart: fullText.length, charEnd: fullText.length + text.length, textElement: t, runElement: r, paragraph: p, container, rPr });
+                                        fullText += text;
+                                    }
+                                }
+                            });
+                        }
+                    });
+                }
+            });
+            if (pIndex < allParagraphs.length - 1) fullText += "\n";
+        });
+
+        const dmp = new diff_match_patch();
+        const diffs = dmp.diff_main(fullText, modifiedText);
+        dmp.diff_cleanupSemantic(diffs);
+
+        let currentPos = 0;
+        const processedSpans = new Set();
+
+        for (const diff of diffs) {
+            const [op, text] = diff;
+            if (op === 0) {
+                currentPos += text.length;
+            } else if (op === -1) {
+                processDelete(xmlDoc, textSpans, currentPos, currentPos + text.length, processedSpans);
+                currentPos += text.length;
+            } else if (op === 1) {
+                const textWithoutNewlines = text.replace(/\n/g, ' ');
+                if (textWithoutNewlines.trim().length > 0) {
+                    processInsert(xmlDoc, textSpans, currentPos, textWithoutNewlines, processedSpans);
+                }
+            }
+        }
+
+        return { oxml: serializer.serializeToString(xmlDoc), hasChanges: true };
+    }
+
+    function processDelete(xmlDoc, textSpans, startPos, endPos, processedSpans) {
+        const affectedSpans = textSpans.filter(s => s.charEnd > startPos && s.charStart < endPos);
+
+        for (const span of affectedSpans) {
+            if (processedSpans.has(span.textElement)) continue;
+
+            const deleteStart = Math.max(0, startPos - span.charStart);
+            const deleteEnd = Math.min(span.charEnd - span.charStart, endPos - span.charStart);
+
+            const originalText = span.textElement.textContent || "";
+            const beforeText = originalText.substring(0, deleteStart);
+            const deletedText = originalText.substring(deleteStart, deleteEnd);
+            const afterText = originalText.substring(deleteEnd);
+
+            if (deletedText.length === 0) continue;
+
+            const parent = span.runElement.parentNode;
+            if (!parent) continue;
+
+            if (beforeText.length === 0 && afterText.length === 0) {
+                const delRun = createTextRun(xmlDoc, deletedText, span.rPr, true);
+                const delWrapper = createTrackChange(xmlDoc, 'del', delRun);
+                parent.insertBefore(delWrapper, span.runElement);
+                parent.removeChild(span.runElement);
+            } else {
+                if (beforeText.length > 0) {
+                    const beforeRun = createTextRun(xmlDoc, beforeText, span.rPr, false);
+                    parent.insertBefore(beforeRun, span.runElement);
+                }
+                const delRun = createTextRun(xmlDoc, deletedText, span.rPr, true);
+                const delWrapper = createTrackChange(xmlDoc, 'del', delRun);
+                parent.insertBefore(delWrapper, span.runElement);
+                if (afterText.length > 0) {
+                    const afterRun = createTextRun(xmlDoc, afterText, span.rPr, false);
+                    parent.insertBefore(afterRun, span.runElement);
+                }
+                parent.removeChild(span.runElement);
+            }
+            processedSpans.add(span.textElement);
+        }
+    }
+
+    function processInsert(xmlDoc, textSpans, pos, text, processedSpans) {
+        // Try to find the span at the insertion position
+        let targetSpan = textSpans.find(s => pos >= s.charStart && pos < s.charEnd);
+
+        // If not found, try the span that ends at this position
+        if (!targetSpan && pos > 0) {
+            targetSpan = textSpans.find(s => pos === s.charEnd);
+        }
+
+        // If still not found, try the span just before
+        if (!targetSpan && pos > 0) {
+            targetSpan = textSpans.find(s => s.charEnd <= pos);
+            if (!targetSpan && textSpans.length > 0) {
+                // Find the closest span before this position
+                const before = textSpans.filter(s => s.charEnd <= pos);
+                if (before.length > 0) {
+                    targetSpan = before[before.length - 1];
+                }
+            }
+        }
+
+        // Last resort: use the last span
+        if (!targetSpan && textSpans.length > 0) {
+            targetSpan = textSpans[textSpans.length - 1];
+        }
+
+        if (targetSpan) {
+            // CRITICAL: Ensure we inherit the rPr for formatting preservation
+            const rPr = targetSpan.rPr;
+            const insRun = createTextRun(xmlDoc, text, rPr, false);
+            const insWrapper = createTrackChange(xmlDoc, 'ins', insRun);
+            const parent = targetSpan.runElement.parentNode;
+            if (parent) parent.insertBefore(insWrapper, targetSpan.runElement.nextSibling);
+        }
+    }
+
+    // RECONSTRUCTION MODE (Restored from Legacy Vibe 3.3 Stable)
+    function applyReconstructionMode(xmlDoc, originalText, modifiedText, serializer) {
+        // 1. EXTRACT PARAGRAPHS
+        const body = xmlDoc.getElementsByTagName("w:body")[0] || xmlDoc.documentElement;
+        const paragraphs = Array.from(xmlDoc.getElementsByTagName("w:p"));
+
+        if (paragraphs.length === 0) return { oxml: serializer.serializeToString(xmlDoc), hasChanges: false };
+
+        // 2. BUILD CONTEXT & MAPS
+        let originalFullText = "";
+        const propertyMap = [];
+        const paragraphMap = [];
+        const sentinelMap = [];
+        const referenceMap = new Map();
+        const tokenToCharMap = new Map();
+        let nextCharCode = 0xe000;
+
+        const uniqueContainers = new Set();
+        const replacementContainers = new Map();
+
+        paragraphs.forEach((p, pIndex) => {
+            const pStart = originalFullText.length;
+            const children = Array.from(p.childNodes);
+
+            children.forEach((child) => {
+                if (child.nodeName === "w:r") {
+                    const r = child;
+                    const rPr = r.getElementsByTagName("w:rPr")[0] || null;
+                    const runChildren = Array.from(r.childNodes);
+
+                    runChildren.forEach((rc) => {
+                        if (rc.nodeName === "w:t") {
+                            const textContent = rc.textContent || "";
+                            if (textContent.length > 0) {
+                                propertyMap.push({
+                                    start: originalFullText.length,
+                                    end: originalFullText.length + textContent.length,
+                                    rPr: rPr,
+                                });
+                                originalFullText += textContent;
+                            }
+                        } else if (["w:drawing", "w:pict", "w:object", "w:fldChar", "w:instrText"].includes(rc.nodeName)) {
+                            // SENTINEL LOGIC
+                            const rcElement = rc;
+                            const txbxContent = rcElement.getElementsByTagName("w:txbxContent")[0];
+                            const hasTextBox = rc.nodeName === "w:pict" && !!txbxContent;
+
+                            if (hasTextBox) {
+                                sentinelMap.push({
+                                    start: originalFullText.length,
+                                    node: rc,
+                                    isTextBox: true,
+                                    originalContainer: txbxContent,
+                                });
+                                originalFullText += "\uFFFC";
+                                propertyMap.push({ start: originalFullText.length - 1, end: originalFullText.length, rPr: rPr });
+                            } else {
+                                sentinelMap.push({ start: originalFullText.length, node: rc });
+                                originalFullText += "\uFFFC";
+                                propertyMap.push({ start: originalFullText.length - 1, end: originalFullText.length, rPr: rPr });
+                            }
+                        } else if (rc.nodeName === "w:footnoteReference" || rc.nodeName === "w:endnoteReference") {
+                            // REFERENCE LOGIC
+                            const ref = rc;
+                            const id = ref.getAttribute("w:id");
+                            if (id) {
+                                const type = rc.nodeName === "w:footnoteReference" ? "FN" : "EN";
+                                const tokenString = `{{__${type}_${id}__}}`;
+                                const char = String.fromCharCode(nextCharCode++);
+                                referenceMap.set(char, rc);
+                                tokenToCharMap.set(tokenString, char);
+                                originalFullText += char;
+                                propertyMap.push({ start: originalFullText.length - 1, end: originalFullText.length, rPr: rPr });
+                            }
+                        }
+                    });
+                } else if (child.nodeName === "w:hyperlink") {
+                    const h = child;
+                    const hChildren = Array.from(h.childNodes);
+                    hChildren.forEach((hc) => {
+                        if (hc.nodeName === "w:r") {
+                            const r = hc;
+                            const rPr = r.getElementsByTagName("w:rPr")[0] || null;
+                            const texts = Array.from(r.getElementsByTagName("w:t"));
+                            texts.forEach((t) => {
+                                const textContent = t.textContent || "";
+                                if (textContent.length > 0) {
+                                    propertyMap.push({
+                                        start: originalFullText.length,
+                                        end: originalFullText.length + textContent.length,
+                                        rPr: rPr,
+                                        wrapper: h,
+                                    });
+                                    originalFullText += textContent;
+                                }
+                            });
+                        }
+                    });
+                } else if (["w:sdt", "w:oMath", "m:oMath", "w:bookmarkStart", "w:bookmarkEnd"].includes(child.nodeName)) {
+                    sentinelMap.push({ start: originalFullText.length, node: child });
+                    originalFullText += "\uFFFC";
+                }
+            });
+
+            if (pIndex < paragraphs.length - 1) {
+                originalFullText += "\n";
+            }
+
+            const pEnd = originalFullText.length;
+            const pPr = p.getElementsByTagName("w:pPr")[0] || null;
+            const container = p.parentNode;
+            if (container) uniqueContainers.add(container);
+
+            paragraphMap.push({
+                start: pStart,
+                end: pEnd,
+                pPr: pPr,
+                container: container || body,
+            });
+        });
+
+        // 3. SANITIZE & PROCESS INPUT
+        // Note: modifiedText passed in is already sanitized by the wrapper, but legacy logic re-sanitizes.
+        // We'll trust the wrapper's sanitization but apply the token replacement.
+        let processedModifiedText = modifiedText || ""; // Fix: Ensure not null
+
+        tokenToCharMap.forEach((char, tokenString) => {
+            const escapedToken = tokenString.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, "\\$&");
+            processedModifiedText = processedModifiedText.replace(new RegExp(escapedToken, "g"), char);
+        });
+
+        // 4. DIFF CALCULATION
+        const dmp = new diff_match_patch();
+        const diffs = dmp.diff_main(originalFullText, processedModifiedText);
+        dmp.diff_cleanupSemantic(diffs);
+
+        // 5. RECONSTRUCTION
+        const containerFragments = new Map();
+        uniqueContainers.forEach((c) => containerFragments.set(c, xmlDoc.createDocumentFragment()));
+        if (!containerFragments.has(body)) containerFragments.set(body, xmlDoc.createDocumentFragment());
+
+        const getParagraphInfo = (index) => {
+            const match = paragraphMap.find((m) => index >= m.start && index < m.end);
+            if (!match && paragraphMap.length > 0) {
+                const last = paragraphMap[paragraphMap.length - 1];
+                return { pPr: last.pPr, container: last.container };
+            }
+            return match ? { pPr: match.pPr, container: match.container } : { pPr: null, container: body };
+        };
+
+        const createNewParagraph = (pPr) => {
+            const newP = xmlDoc.createElement("w:p");
+            if (pPr) newP.appendChild(pPr.cloneNode(true));
+            return newP;
+        };
+
+        let startInfo = getParagraphInfo(0);
+        let currentParagraph = createNewParagraph(startInfo.pPr);
+        let currentContainer = startInfo.container;
+        let currentFragment = containerFragments.get(currentContainer);
+        if (currentFragment) currentFragment.appendChild(currentParagraph);
+
+        let currentOriginalIndex = 0;
+        const usedReferenceTokens = new Set();
+
+        const getRunProperties = (index) => {
+            const match = propertyMap.find((m) => index >= m.start && index < m.end);
+            return match ? { rPr: match.rPr, wrapper: match.wrapper } : { rPr: null };
+        };
+
+        const appendTextToCurrent = (text, type, rPr, wrapper, baseIndex) => {
+            const parts = text.split(/([\n\uFFFC]|[\uE000-\uF8FF])/);
+            let localOffset = 0;
+
+            parts.forEach((part) => {
+                if (part === "\n") {
+                    if (type !== "delete") {
+                        let pPr = null;
+                        let targetContainer = currentContainer;
+
+                        if (type === "equal") {
+                            const lookupIndex = baseIndex + localOffset + 1;
+                            const info = getParagraphInfo(lookupIndex);
+                            pPr = info.pPr;
+                            targetContainer = info.container;
+                        } else {
+                            const info = getParagraphInfo(baseIndex);
+                            pPr = info.pPr;
+                            targetContainer = info.container;
+                        }
+
+                        currentParagraph = createNewParagraph(pPr);
+                        if (targetContainer !== currentContainer) {
+                            currentContainer = targetContainer;
+                            currentFragment = containerFragments.get(currentContainer);
+                        }
+                        if (currentFragment) currentFragment.appendChild(currentParagraph);
+                    }
+                    localOffset += 1;
+                } else if (part === "\uFFFC") {
+                    const sentinelIndex = baseIndex + localOffset;
+                    const sentinel = sentinelMap.find((s) => s.start === sentinelIndex);
+
+                    if (sentinel) {
+                        const clone = sentinel.node.cloneNode(true);
+                        if (sentinel.isTextBox && sentinel.originalContainer) {
+                            const newContainer = clone.getElementsByTagName("w:txbxContent")[0];
+                            if (newContainer) {
+                                while (newContainer.firstChild) newContainer.removeChild(newContainer.firstChild);
+                                replacementContainers.set(sentinel.originalContainer, newContainer);
+                            }
+                        }
+                        if (sentinel.node.nodeName === "w:r" || sentinel.node.parentNode?.nodeName === "w:r") {
+                            const run = xmlDoc.createElement("w:r");
+                            if (rPr) run.appendChild(rPr.cloneNode(true));
+                            run.appendChild(clone);
+                            currentParagraph.appendChild(run);
+                        } else {
+                            currentParagraph.appendChild(clone);
+                        }
+                    }
+                    localOffset += 1;
+                } else if (referenceMap.has(part)) {
+                    if (type !== "delete") {
+                        const refNode = referenceMap.get(part);
+                        if (refNode) {
+                            const clone = refNode.cloneNode(true);
+                            const run = xmlDoc.createElement("w:r");
+                            if (rPr) run.appendChild(rPr.cloneNode(true));
+                            run.appendChild(clone);
+                            currentParagraph.appendChild(run);
+                            let tokenString = "";
+                            tokenToCharMap.forEach((c, t) => {
+                                if (c === part) tokenString = t;
+                            });
+                            usedReferenceTokens.add(tokenString);
+                        }
+                    }
+                    localOffset += part.length;
+                } else if (part.length > 0) {
+                    const run = xmlDoc.createElement("w:r");
+                    if (rPr) run.appendChild(rPr.cloneNode(true));
+
+                    let parent = currentParagraph;
+                    if (wrapper) {
+                        const wrapperClone = wrapper.cloneNode(false);
+                        parent = wrapperClone;
+                        currentParagraph.appendChild(wrapperClone);
+                    }
+
+                    const t = type === "delete" ? xmlDoc.createElement("w:delText") : xmlDoc.createElement("w:t");
+                    t.setAttribute("xml:space", "preserve");
+                    t.textContent = part;
+
+                    run.appendChild(t);
+
+                    if (type === "delete") {
+                        const del = xmlDoc.createElement("w:del");
+                        del.setAttribute("w:id", Math.floor(Math.random() * 10000).toString());
+                        del.setAttribute("w:author", getTrackChangeAuthor());
+                        del.setAttribute("w:date", new Date().toISOString());
+                        del.appendChild(run);
+                        parent.appendChild(del);
+                    } else if (type === "insert") {
+                        const ins = xmlDoc.createElement("w:ins");
+                        ins.setAttribute("w:id", Math.floor(Math.random() * 10000).toString());
+                        ins.setAttribute("w:author", getTrackChangeAuthor());
+                        ins.setAttribute("w:date", new Date().toISOString());
+                        ins.appendChild(run);
+                        parent.appendChild(ins);
+                    } else {
+                        parent.appendChild(run);
+                    }
+                    localOffset += part.length;
+                }
+            });
+        };
+
+        for (const diff of diffs) {
+            const [op, text] = diff;
+            if (op === 0) {
+                let offset = 0;
+                while (offset < text.length) {
+                    const props = getRunProperties(currentOriginalIndex + offset);
+                    const currentPropRange = propertyMap.find(
+                        (m) => currentOriginalIndex + offset >= m.start && currentOriginalIndex + offset < m.end,
+                    );
+                    let length = currentPropRange
+                        ? Math.min(currentPropRange.end - (currentOriginalIndex + offset), text.length - offset)
+                        : 1;
+                    const chunk = text.substring(offset, offset + length);
+                    appendTextToCurrent(chunk, "equal", props.rPr || null, props.wrapper, currentOriginalIndex + offset);
+                    offset += length;
+                }
+                currentOriginalIndex += text.length;
+            } else if (op === 1) {
+                const isStartOfParagraph = paragraphMap.some((p) => p.start === currentOriginalIndex);
+                const props =
+                    currentOriginalIndex > 0 && !isStartOfParagraph
+                        ? getRunProperties(currentOriginalIndex - 1)
+                        : getRunProperties(currentOriginalIndex);
+                appendTextToCurrent(text, "insert", props.rPr || null, props.wrapper, currentOriginalIndex);
+            } else if (op === -1) {
+                let offset = 0;
+                while (offset < text.length) {
+                    const props = getRunProperties(currentOriginalIndex + offset);
+                    const currentPropRange = propertyMap.find(
+                        (m) => currentOriginalIndex + offset >= m.start && currentOriginalIndex + offset < m.end,
+                    );
+                    let length = currentPropRange
+                        ? Math.min(currentPropRange.end - (currentOriginalIndex + offset), text.length - offset)
+                        : 1;
+                    const chunk = text.substring(offset, offset + length);
+                    appendTextToCurrent(chunk, "delete", props.rPr || null, props.wrapper, currentOriginalIndex + offset);
+                    offset += length;
+                }
+                currentOriginalIndex += text.length;
+            }
+        }
+
+        paragraphs.forEach((p) => {
+            if (p.parentNode) p.parentNode.removeChild(p);
+        });
+
+        containerFragments.forEach((fragment, container) => {
+            const replacement = replacementContainers.get(container);
+            const target = replacement || container;
+            target.appendChild(fragment);
+        });
+
+        return { oxml: serializer.serializeToString(xmlDoc), hasChanges: true };
+    }
+
+    function sanitizeAiResponse(text) {
+        let cleaned = text;
+        cleaned = cleaned.replace(/^(Here is the redline:|Here is the text:|Sure, I can help:|Here's the updated text:)\s*/i, "");
+        cleaned = cleaned.replace(/\$\\text\{/g, "").replace(/\}\$/g, "");
+        cleaned = cleaned.replace(/\$([^0-9\n]+?)\$/g, "$1");
+        return cleaned;
+    }
+
+    // ==========================================
+    // SELECTION TRACK CHANGES HANDLER
+    // ==========================================
+
+    async function getAcceptedSelectionText(context: Word.RequestContext): Promise<{ text: string; oxml: string }> {
+        const selection = context.document.getSelection();
+        const oxmlResult = selection.getOoxml();
+        await context.sync();
+        
+        const parser = new DOMParser();
+        const xmlDoc = parser.parseFromString(oxmlResult.value, "text/xml");
+        
+        // Remove all <w:del> elements (deleted text)
+        const deletions = xmlDoc.getElementsByTagName("w:del");
+        while (deletions.length > 0) {
+            deletions[0].parentNode?.removeChild(deletions[0]);
+        }
+        
+        // Remove w:delText elements
+        const delTexts = xmlDoc.getElementsByTagName("w:delText");
+        while (delTexts.length > 0) {
+            delTexts[0].parentNode?.removeChild(delTexts[0]);
+        }
+        
+        // Unwrap <w:ins> elements (keep content)
+        const insertions = xmlDoc.getElementsByTagName("w:ins");
+        while (insertions.length > 0) {
+            const ins = insertions[0];
+            const parent = ins.parentNode;
+            while (ins.firstChild) {
+                parent?.insertBefore(ins.firstChild, ins);
+            }
+            parent?.removeChild(ins);
+        }
+        
+        // Extract text
+        const paragraphs = xmlDoc.getElementsByTagName("w:p");
+        let acceptedText = "";
+        
+        for (let p = 0; p < paragraphs.length; p++) {
+            const textElements = paragraphs[p].getElementsByTagName("w:t");
+            let paragraphText = "";
+            for (let t = 0; t < textElements.length; t++) {
+                paragraphText += textElements[t].textContent || "";
+            }
+            if (paragraphText.length > 0) {
+                acceptedText += paragraphText + "\n";
+            }
+        }
+        
+        return {
+            text: acceptedText.trim(),
+            oxml: oxmlResult.value
+        };
+    }
+
+    // ==========================================
+    // CONTEXT CACHING SYSTEM - Functions
+    // ==========================================
+
+    async function createGeminiCache(apiKey: string, model: string, fullDocumentText: string): Promise<string> {
+        const cleanModel = (model || "gemini-2.0-flash-exp").replace(/^models\//, "");
+        
+        const url = `https://generativelanguage.googleapis.com/v1beta/cachedContents?key=${apiKey}`;
+        
+        const response = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                model: `models/${cleanModel}`,
+                displayName: `vibe-legal-${Date.now()}`,
+                contents: [{
+                    parts: [{ text: fullDocumentText }],
+                    role: "user"
+                }],
+                systemInstruction: {
+                    parts: [{ 
+                        text: "You are Vibe Legal, an AI legal contract analyst. The document above is a legal contract loaded for your reference. Understand this document deeply: Identify the parties and their roles. Note all defined terms and their meanings. Understand liability caps, indemnities, and risk allocation. Recognize the document structure and clause organization. Note governing law and dispute resolution provisions. You will receive instructions with a CURRENT STRUCTURE MAP showing paragraph IDs. Always use those IDs for any location references - they reflect the live document state."
+                    }]
+                },
+                ttl: `${CACHE_CONFIG.cacheTTL / 1000}s`
+            })
+        });
+        
+        if (!response.ok) {
+            const error = await response.json();
+            const errorMsg = error.error?.message || "Failed to create cache";
+            
+            // Log the actual error for debugging
+            console.error("[Vibe] Cache creation failed:", response.status, errorMsg);
+            
+            // Check if error specifically indicates model doesn't support caching
+            // Be precise - only match clear "model doesn't support" messages
+            const lowerMsg = errorMsg.toLowerCase();
+            if ((lowerMsg.includes("model") && lowerMsg.includes("not support")) ||
+                lowerMsg.includes("does not support caching") ||
+                lowerMsg.includes("cachedcontent is not supported")) {
+                throw new Error("ModelDoesNotSupportCaching");
+            }
+            
+            // For other errors, throw with the actual message
+            throw new Error(errorMsg);
+        }
+        
+        const data = await response.json();
+        console.log("[Vibe] Context cache created:", data.name);
+        return data.name;
+    }
+
+    async function deleteGeminiCache(apiKey: string, cacheId: string): Promise<void> {
+        if (!cacheId) return;
+        
+        try {
+            const url = `https://generativelanguage.googleapis.com/v1beta/${cacheId}?key=${apiKey}`;
+            await fetch(url, { method: "DELETE" });
+            console.log("[Vibe] Context cache deleted:", cacheId);
+        } catch (e) {
+            console.warn("[Vibe] Failed to delete cache:", e);
+        }
+    }
+
+    function isCacheExpired(): boolean {
+        if (!cacheState.createdAt) return true;
+        return Date.now() - cacheState.createdAt.getTime() > CACHE_CONFIG.cacheTTL;
+    }
+
+    async function ensureCache(apiKey: string, model: string, fullDocumentText: string): Promise<{ cacheId: string | null; error?: string }> {
+        // Return existing valid cache
+        if (cacheState.cacheId && !isCacheExpired()) {
+            return { cacheId: cacheState.cacheId };
+        }
+        
+        // Check if document is large enough for caching (Gemini requires ~2048 tokens minimum)
+        if (fullDocumentText.length < CACHE_CONFIG.minCacheChars) {
+            console.log(`[Vibe] Document too small for caching (${fullDocumentText.length} chars < ${CACHE_CONFIG.minCacheChars}), using direct mode`);
+            cacheState = { cacheId: null, createdAt: null, changelog: [] };
+            return { cacheId: null };  // Silent - no error message, just skip caching
+        }
+        
+        // Create new cache
+        try {
+            console.log("[Vibe] Creating context cache...");
+            const cacheId = await createGeminiCache(apiKey, model, fullDocumentText);
+            cacheState = {
+                cacheId,
+                createdAt: new Date(),
+                changelog: []
+            };
+            return { cacheId };
+        } catch (e) {
+            const errorMsg = (e as Error).message;
+            
+            // Specific handling for models that don't support caching
+            if (errorMsg === "ModelDoesNotSupportCaching") {
+                console.warn("[Vibe] Model does not support caching, using direct mode");
+                cacheState = { cacheId: null, createdAt: null, changelog: [] };
+                return { cacheId: null, error: "This model doesn't support caching. Using Direct Mode." };
+            }
+            
+            // Check for "too small" error and silently skip
+            if (errorMsg.toLowerCase().includes("too small")) {
+                console.warn("[Vibe] Document too small for caching, using direct mode");
+                cacheState = { cacheId: null, createdAt: null, changelog: [] };
+                return { cacheId: null };
+            }
+            
+            // Generic cache failure - show actual error
+            console.warn("[Vibe] Context caching unavailable:", errorMsg);
+            cacheState = { cacheId: null, createdAt: null, changelog: [] };
+            return { cacheId: null, error: `Cache failed: ${errorMsg}. Using Direct Mode.` };
+        }
+    }
+
+    function logChange(type: "INSERT" | "MODIFY", description: string, content?: string): void {
+        const entry: ChangeEntry = {
+            type,
+            description,
+            // Store up to 2000 chars of actual content for question answering
+            content: content ? content.substring(0, 2000) : undefined,
+            timestamp: new Date()
+        };
+        
+        cacheState.changelog.push(entry);
+        console.log(`[Vibe] Logged change: ${type} - ${description.substring(0, 50)}...`);
+    }
+
+    function shouldRefreshCache(): boolean {
+        if (cacheState.changelog.length >= CACHE_CONFIG.maxChangelogEntries) {
+            return true;
+        }
+        
+        const totalChars = cacheState.changelog.reduce(
+            (sum, e) => sum + (e.content?.length || 0) + e.description.length, 
+            0
+        );
+        
+        return totalChars >= CACHE_CONFIG.maxChangelogChars;
+    }
+
+    async function refreshCache(apiKey: string, model: string, fullDocumentText: string): Promise<{ success: boolean; error?: string }> {
+        console.log("[Vibe] Refreshing context cache...");
+        
+        // Delete old cache
+        if (cacheState.cacheId) {
+            await deleteGeminiCache(apiKey, cacheState.cacheId);
+        }
+        
+        // Check if document is large enough for caching
+        if (fullDocumentText.length < CACHE_CONFIG.minCacheChars) {
+            console.log(`[Vibe] Document too small for caching (${fullDocumentText.length} chars), using direct mode`);
+            cacheState = { cacheId: null, createdAt: null, changelog: [] };
+            return { success: true };  // Not an error - just skip caching
+        }
+        
+        // Create new cache
+        try {
+            const cacheId = await createGeminiCache(apiKey, model, fullDocumentText);
+            cacheState = {
+                cacheId,
+                createdAt: new Date(),
+                changelog: []
+            };
+            console.log("[Vibe] Context cache refreshed successfully");
+            return { success: true };
+        } catch (e) {
+            const errorMsg = (e as Error).message;
+            
+            if (errorMsg === "ModelDoesNotSupportCaching") {
+                console.warn("[Vibe] Model does not support caching");
+                cacheState = { cacheId: null, createdAt: null, changelog: [] };
+                return { success: false, error: "This model doesn't support caching. Using Direct Mode." };
+            }
+            
+            // Check for "too small" error and silently skip
+            if (errorMsg.toLowerCase().includes("too small")) {
+                console.warn("[Vibe] Document too small for caching, using direct mode");
+                cacheState = { cacheId: null, createdAt: null, changelog: [] };
+                return { success: true };
+            }
+            
+            // Show actual error
+            console.warn("[Vibe] Cache refresh failed:", errorMsg);
+            cacheState = { cacheId: null, createdAt: null, changelog: [] };
+            return { success: false, error: `Cache failed: ${errorMsg}. Using Direct Mode.` };
+        }
+    }
+
+    function buildChangelogSection(): string {
+        if (cacheState.changelog.length === 0) {
+            return "";
+        }
+        
+        const entries = cacheState.changelog.map((c, i) => {
+            const contentPreview = c.content ? ` Content: "${c.content.substring(0, 100)}..."` : "";
+            return `[${i + 1}] ${c.type}: ${c.description}${contentPreview}`;
+        }).join("\n");
+        
+        return "\nCHANGES SINCE CONTEXT WAS LOADED:\n" + entries + "\n\nIMPORTANT: The above changes are MORE RECENT than your cached knowledge. When these topics are relevant, trust this changelog over your cached memory.";
+    }
+
+    function getCacheStatus(): "loaded" | "loading" | "direct" {
+        if (cacheState.cacheId && !isCacheExpired()) return "loaded";
+        if (cacheState.cacheId === null && cacheState.createdAt === null) return "direct";
+        return "loading";
+    }
+
+    // ==========================================
+    // QUESTION DETECTION SYSTEM
+    // ==========================================
+
+    function isQuestionIntent(prompt: string): boolean {
+        const questionPatterns = [
+            /^(is|are|does|do|can|could|would|should|will|has|have|was|were)\s/i,
+            /^(what|who|where|when|why|how|which)\s/i,
+            /\?$/,
+            /^(tell me|explain|describe|summarize|analyze|review|check|assess|evaluate|compare)/i,
+            /^(is this|is it|are there|does this|does it)/i,
+            /(balanced|fair|reasonable|standard|typical|unusual|risky|favorable|unfavorable|one-way|mutual|reciprocal)/i,
+            /(compliant|enforceable|valid|binding)/i,
+            /^(find|show|list|identify|highlight|point out)/i,
+            /(what are the|what is the|who is|who are)/i
+        ];
+        
+        const changePatterns = [
+            /^(add|insert|create|draft|write|include)/i,
+            /^(change|modify|update|amend|revise|edit|fix|correct)/i,
+            /^(delete|remove|strike|redline)/i,
+            /^(make it|make this|convert|turn this)/i,
+            /^(strengthen|weaken|soften|clarify)/i
+        ];
+        
+        const looksLikeQuestion = questionPatterns.some(p => p.test(prompt.trim()));
+        const looksLikeChange = changePatterns.some(p => p.test(prompt.trim()));
+        
+        return looksLikeQuestion && !looksLikeChange;
+    }
+
+    async function callGeminiQuestion(
+        apiKey: string,
+        model: string,
+        question: string,
+        currentDocumentText: string,
+        changelog: ChangeEntry[],
+        cacheId: string | null
+    ): Promise<string> {
+        const cleanModel = (model || "gemini-2.0-flash-exp").replace(/^models\//, "");
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${apiKey}`;
+        
+        const isShortDocument = currentDocumentText.length < CACHE_CONFIG.minCacheChars;
+        
+        let changeSection = "";
+        if (changelog.length > 0) {
+            const changes = changelog.map((c, i) => {
+                const contentPreview = c.content 
+                    ? "\nNew text: \"" + c.content.substring(0, 1000) + (c.content.length > 1000 ? "..." : "") + "\""
+                    : "";
+                return "[" + (i + 1) + "] " + c.type + ": " + c.description + contentPreview;
+            }).join("\n\n");
+            
+            changeSection = "\n=== CHANGES MADE THIS SESSION ===\nThe following changes have been applied (shown as track changes in Word):\n\n" + changes + "\n\nIMPORTANT: These changes are now part of the document. Answer based on the CURRENT state.\n";
+        }
+        
+        let systemPrompt: string;
+        
+        if (isShortDocument) {
+            console.log("[Vibe] Short document (" + currentDocumentText.length + " chars) - sending full text for question");
+            
+            systemPrompt = "You are Vibe Legal, a legal document analyst.\n\n=== CURRENT DOCUMENT (FULL TEXT) ===\n" + currentDocumentText + "\n" + changeSection + "\n=== INSTRUCTIONS ===\nAnswer the user's question based on the document above.\nThis is the CURRENT state of the document with all changes applied.\nBe specific and reference actual clauses or language.\n\nUSER QUESTION: " + question;
+        } else {
+            console.log("[Vibe] Long document (" + currentDocumentText.length + " chars) - using cache + changelog for question");
+            
+            const contextNote = cacheId
+                ? "You have the full contract loaded in your context from when the session started."
+                : "Note: Document context not cached. Working with changelog only.";
+            
+            const criticalInstruction = changelog.length > 0 
+                ? "Changes have been made this session. Your cached knowledge may be OUTDATED for the modified sections.\nTrust the changelog above for any topics that were changed.\nFor example, if the changelog shows confidentiality was changed from one-way to mutual,\nthe document is NOW mutual - do not rely on your cached memory of it being one-way."
+                : "No changes have been made this session. Your cached knowledge is current.";
+            
+            systemPrompt = "You are Vibe Legal, a legal document analyst.\n\n=== YOUR KNOWLEDGE ===\n" + contextNote + "\n" + changeSection + "\n=== CRITICAL INSTRUCTION ===\n" + criticalInstruction + "\n\nAnswer the user's question based on the CURRENT state of the document.\nBe specific and reference actual clauses or language.\n\nUSER QUESTION: " + question;
+        }
+        
+        const requestBody: any = {
+            contents: [{ parts: [{ text: systemPrompt }] }]
+        };
+        
+        if (!isShortDocument && cacheId) {
+            requestBody.cachedContent = cacheId;
+        }
+        
+        const response = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(requestBody)
+        });
+        
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.error?.message || "HTTP " + response.status);
+        }
+        
+        const data = await response.json();
+        return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "I couldn't analyze the document.";
+    }
+
+    // ==========================================
+    // CONVERSATION CONTEXT SYSTEM
+    // ==========================================
+
+    interface ContextAnalysis {
+        includeHistory: boolean;
+        relevantEntries: ChangeEntry[];
+        referenceType: "none" | "explicit" | "implicit";
+    }
+
+    function analyzePromptForReferences(prompt: string, changelog: ChangeEntry[]): ContextAnalysis {
+        // Patterns that EXPLICITLY reference previous work
+        const explicitPatterns = [
+            /same (thing|way|approach|treatment|wording|language)/i,
+            /like (before|we did|the previous|earlier|last time)/i,
+            /similar(ly)? to (what|how)/i,
+            /do that (to|for|with)/i,
+            /apply (that|this|the same) to/i,
+            /repeat (that|this) for/i,
+            /as we did (with|for|to)/i,
+            /(also|too|as well)$/i
+        ];
+        
+        // Patterns that IMPLICITLY might reference previous work
+        const implicitPatterns = [
+            /^(and|also|now)\s/i,
+            /the other/i,
+            /remaining/i,
+            /rest of/i
+        ];
+        
+        const hasExplicitReference = explicitPatterns.some(p => p.test(prompt));
+        const hasImplicitReference = implicitPatterns.some(p => p.test(prompt));
+        
+        if (hasExplicitReference) {
+            // User explicitly wants to reference previous work
+            // Include last 3 changes with full details
+            return {
+                includeHistory: true,
+                relevantEntries: changelog.slice(-3),
+                referenceType: "explicit"
+            };
+        }
+        
+        if (hasImplicitReference && changelog.length > 0) {
+            // Might be referencing - include minimal context
+            return {
+                includeHistory: true,
+                relevantEntries: changelog.slice(-1),
+                referenceType: "implicit"
+            };
+        }
+        
+        // Independent request - no history needed
+        return {
+            includeHistory: false,
+            relevantEntries: [],
+            referenceType: "none"
+        };
+    }
+
+    function buildContextSection(changelog: ChangeEntry[], analysis: ContextAnalysis): string {
+        // Always show what's been completed (but framed as DONE, not instructions)
+        let completedSection = "";
+        if (changelog.length > 0) {
+            const completedList = changelog.map((c, i) => 
+                `[${i + 1}] ${c.type}: ${c.description}`
+            ).join("\n");
+            
+            completedSection = "COMPLETED CHANGES THIS SESSION:\n" + completedList + "\n";
+        }
+        
+        // Add reference context only if needed
+        let referenceSection = "";
+        if (analysis.includeHistory && analysis.relevantEntries.length > 0) {
+            if (analysis.referenceType === "explicit") {
+                const details = analysis.relevantEntries.map(e => {
+                    const contentPreview = e.content ? " Content: \"" + e.content.substring(0, 150) + "...\"" : "";
+                    return "- " + e.type + " " + e.description + contentPreview;
+                }).join("\n");
+                
+                referenceSection = "\nUSER IS REFERENCING PREVIOUS WORK. Relevant changes:\n" + details + "\n\nApply a similar approach to the current request.";
+            } else {
+                // Implicit - be cautious
+                referenceSection = "\nPOSSIBLE REFERENCE to recent change: " + analysis.relevantEntries[0].description + "\nOnly apply if the user's request clearly relates to this.";
+            }
+        }
+        
+        // Always include the independence instruction
+        const independenceNote = "\nIMPORTANT: Unless the user explicitly says \"same\", \"like before\", or similar:\n- Treat this request as INDEPENDENT\n- Do NOT apply previous $ amounts, caps, or specific wording to new clauses\n- Do NOT assume connections between different sections\n- The changelog shows what's DONE, not patterns to repeat";
+
+        return completedSection + referenceSection + independenceNote;
+    }
+    // ==========================================
+    // V10.0 DOCUMENT SNAPSHOT (AI-Driven Analysis)
+    // ==========================================
+
+    interface ParagraphSnapshot {
+        id: number;
+        text: string;
+        styleId: string;
+        token: string;
+        fmt: {
+            bold: boolean;
+            allCaps: boolean;
+            alignment: string;
+        };
+        list: {
+            isListItem: boolean;
+            level: number;
+        };
+    }
+
+    interface DocumentSnapshot {
+        paragraphs: ParagraphSnapshot[];
+        totalParagraphs: number;
+        lastParagraphId: number;
+    }
+
+    async function captureDocumentSnapshot(
+        context: Word.RequestContext,
+        paragraphs: Word.ParagraphCollection,
+        styleCache: Map<string, StyleToken>
+    ): Promise<DocumentSnapshot> {
+        console.log("[Vibe] Capturing Document Snapshot for AI Analysis...");
+
+        // Load ALL properties we need in ONE batch - use style (display name) not styleId
+        paragraphs.load("text, style, isListItem, alignment");
+        await context.sync();
+
+        // For list items, load level
+        for (let i = 0; i < paragraphs.items.length; i++) {
+            const p = paragraphs.items[i];
+            if (p.isListItem) {
+                p.listItem.load("level");
+            }
+        }
+        await context.sync();
+
+        const totalParagraphs = paragraphs.items.length;
+        const snapshotParagraphs: ParagraphSnapshot[] = [];
+
+        // Determine which paragraphs to capture (first 40 + last 10)
+        const indicesToCapture = new Set<number>();
+
+        // First 40
+        for (let i = 0; i < Math.min(40, totalParagraphs); i++) {
+            indicesToCapture.add(i);
+        }
+
+        // Last 10
+        for (let i = Math.max(0, totalParagraphs - 10); i < totalParagraphs; i++) {
+            indicesToCapture.add(i);
+        }
+
+        // Build reverse token lookup (styleName -> token) using display names
+        const styleNameToToken = new Map<string, string>();
+        styleCache.forEach((data, token) => {
+            styleNameToToken.set(data.styleName, token);
+        });
+
+        // Capture snapshots
+        for (const idx of Array.from(indicesToCapture).sort((a, b) => a - b)) {
+            const p = paragraphs.items[idx];
+            const text = (p.text || "").substring(0, 100).trim();
+            const styleName = p.style || "Normal";  // Use display name
+            const token = styleNameToToken.get(styleName) || "S1";
+
+            // Detect formatting traits from text patterns
+            const isAllCaps = text.length > 0 && text === text.toUpperCase() && /[A-Z]/.test(text);
+            const hasBoldPattern = /^\*\*/.test(text) || /^\d+\.\s+[A-Z]/.test(text);
+
+            let listLevel = 0;
+            if (p.isListItem) {
+                try {
+                    listLevel = p.listItem.level || 0;
+                } catch (e) {
+                    listLevel = 0;
+                }
+            }
+
+            snapshotParagraphs.push({
+                id: idx + 1, // 1-indexed for document map
+                text: text,
+                styleId: styleName,  // Use display name (styleName)
+                token: token,
+                fmt: {
+                    bold: hasBoldPattern,
+                    allCaps: isAllCaps,
+                    alignment: p.alignment || "Left"
+                },
+                list: {
+                    isListItem: p.isListItem || false,
+                    level: listLevel
+                }
+            });
+        }
+
+        console.log(`[Vibe] Snapshot captured: ${snapshotParagraphs.length} paragraphs from ${totalParagraphs} total`);
+
+        return {
+            paragraphs: snapshotParagraphs,
+            totalParagraphs: totalParagraphs,
+            lastParagraphId: totalParagraphs
+        };
+    }
+
+    // ==========================================
+    // NETWORK LAYER
+    // ==========================================
+
+    async function fetchModelsFromGoogle(apiKey: string): Promise<any[]> {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`;
+        const response = await fetch(url);
+        if (!response.ok) throw new Error("Failed to fetch models");
+        const data = await response.json();
+        
+        const allModels = data.models || [];
+        
+        // Filter: Only keep models that support generateContent
+        const textModels = allModels.filter((m: any) => 
+            m.supportedGenerationMethods?.includes("generateContent")
+        );
+        
+        // Helper to extract version number (e.g., "gemini-1.5-pro" -> 1.5)
+        const getVersion = (name: string): number => {
+            const match = name.match(/gemini-(\d+\.?\d*)/i);
+            return match ? parseFloat(match[1]) : 0;
+        };
+        
+        // Helper to get model tier (Pro > Flash > others)
+        const getTier = (name: string): number => {
+            const lower = name.toLowerCase();
+            if (lower.includes("pro")) return 3;
+            if (lower.includes("flash")) return 2;
+            return 1;
+        };
+        
+        // Helper to get variant priority (latest > 002 > 001 > exp)
+        const getVariant = (name: string): number => {
+            const lower = name.toLowerCase();
+            if (lower.includes("latest")) return 4;
+            if (lower.includes("002")) return 3;
+            if (lower.includes("001")) return 2;
+            if (lower.includes("exp")) return 1;
+            return 0;
+        };
+        
+        // Sort: Primary by version (desc), then tier (desc), then variant (desc)
+        textModels.sort((a: any, b: any) => {
+            const aName = a.name || "";
+            const bName = b.name || "";
+            
+            // Compare versions (higher is better)
+            const versionDiff = getVersion(bName) - getVersion(aName);
+            if (versionDiff !== 0) return versionDiff;
+            
+            // Compare tier (Pro > Flash)
+            const tierDiff = getTier(bName) - getTier(aName);
+            if (tierDiff !== 0) return tierDiff;
+            
+            // Compare variant (latest > 002 > 001)
+            return getVariant(bName) - getVariant(aName);
+        });
+        
+        console.log("[Vibe] Sorted models:", textModels.slice(0, 5).map((m: any) => m.name));
+        return textModels;
+    }
+
+    async function callGeminiRouter(
+        apiKey: string, 
+        model: string, 
+        prompt: string, 
+        styleMenu: string, 
+        snapshot: DocumentSnapshot,
+        cacheId: string | null
+    ): Promise<any> {
+        if (!apiKey) throw new Error("API Key missing.");
+        const cleanModel = (model || "gemini-2.0-flash-exp").replace(/^models\//, "");
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${apiKey}`;
+
+        const backtick = String.fromCharCode(96);
+        const snapshotJSON = JSON.stringify(snapshot.paragraphs, null, 2);
+        
+        // NEW: Analyze prompt for references and build context
+        const contextAnalysis = analyzePromptForReferences(prompt, cacheState.changelog);
+        const contextSection = buildContextSection(cacheState.changelog, contextAnalysis);
+        
+        // Context awareness instruction
+        const contextInstruction = cacheId 
+            ? "You have the FULL CONTRACT loaded in your context. Use this deep knowledge to understand parties, defined terms, liability caps, cross-references, and document structure."
+            : "Working in direct mode without cached context. Analyze based on the snapshot provided.";
+
+        const systemInstruction = `SYSTEM: You are Vibe Legal, an intelligent legal document analyzer.
+
+    === YOUR KNOWLEDGE ===
+    ${contextInstruction}
+
+    === SESSION CONTEXT ===
+    ${contextSection}
+
+    === DOCUMENT ANALYSIS PROCESS ===
+
+    STEP 1: IDENTIFY THE "MAIN CLAUSE" PATTERN
+    Look at the SNAPSHOT paragraphs. Find patterns like "1. Term", "2. Payment", etc.
+    Analyze:
+    - Which styleId/token is used for these numbered clauses?
+    - Are they Bold (fmt.bold = true)? All Caps (fmt.allCaps = true)?
+    - Is the numbering manual (e.g. "1.", "2.") or from a Word list (list.isListItem = true)?
+
+    STEP 2: IDENTIFY THE DOCUMENT STRUCTURE
+    - "Block" style: Heading on its own paragraph, body on the next
+    - "Inline" style: Heading and body combined with bold title
+
+    STEP 3: GENERATE YOUR RESPONSE
+    Apply the EXACT same style tokens and formatting to new content.
+
+    === CURRENT DOCUMENT STRUCTURE ===
+    Use these paragraph IDs for location_id. This is the LIVE state of the document.
+
+    STYLE MENU (available styles with tokens):
+    ${styleMenu}
+
+    DOCUMENT SNAPSHOT (first 40 + last 10 paragraphs):
+    ${snapshotJSON}
+
+    TOTAL PARAGRAPHS: ${snapshot.totalParagraphs}
+    LAST PARAGRAPH ID: ${snapshot.lastParagraphId}
+
+    === OUTPUT FORMAT (JSON ONLY) ===
+    Return ONLY valid JSON. No markdown. No code blocks (no ${backtick}${backtick}${backtick}).
+
+    {
+        "intent": "INSERT" | "MODIFY" | "HYBRID" | "ANSWER",
+        "analysis": {
+            "clauseStyle": { "token": "S1", "styleId": "Normal", "isBold": true, "isAllCaps": false },
+            "bodyStyle": { "token": "S1", "styleId": "Normal" },
+            "structure": "inline" | "block",
+            "lastClauseNumber": 5
+        },
+        "answer": "Optional explanation",
+        "actions": [
+            {
+                "type": "INSERT",
+                "location_id": <number>,
+                "blocks": [{ "styleId": "<token>", "content": "**6. New Clause Title.** Body text here..." }]
+            },
+            {
+                "type": "MODIFY",
+                "target_id": <number>,
+                "instruction": "What to change"
+            }
+        ]
+    }
+
+    === RULES ===
+
+    RULE 1: STYLE MATCHING
+    - Use the EXACT token from your analysis for clause titles and body text
+    - If structure is "inline", combine title and body in ONE block with **bold** title
+    - If structure is "block", use separate blocks for title and body
+
+    RULE 2: INLINE FORMATTING
+    - Use **text** for bold, *text* for italic
+    - The engine converts these to proper OXML runs
+
+    RULE 3: LOCATION SEMANTICS
+    - location_id means "insert AFTER this paragraph ID"
+    - To insert BEFORE paragraph 25, use location_id: 24
+    - STANDARD CONTRACT ORDER: Definitions, Operative terms, Boilerplate, Governing Law, Signatures
+    - BOILERPLATE (No Waiver, Severability, etc.) goes BEFORE Governing Law
+
+    RULE 4: NUMBERING
+    - Continue from the last clause number, match the format (1. vs 1) vs (1))
+
+    RULE 5: INDEPENDENCE
+    - Unless the user explicitly references previous work, treat this as a fresh request
+    - Do not carry over specific values ($, dates, names) from previous changes to new clauses
+
+    === CURRENT REQUEST ===
+    ${prompt}`;
+
+        const requestBody: any = {
+            contents: [{ parts: [{ text: systemInstruction }] }],
+            generationConfig: { responseMimeType: "application/json" }
+        };
+        
+        if (cacheId) {
+            requestBody.cachedContent = cacheId;
+        }
+
+        const response = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(requestBody)
+        });
+
+        const data = await response.json();
+        const text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "{}";
+
+        console.log("[Vibe] Router Response:", text.substring(0, 200) + "...");
+
+        let result = tryParseJSON(text);
+
+        if (!result) {
+            console.warn("[Vibe] Router failed to parse JSON.");
+            result = {
+                intent: "ANSWER",
+                answer: "I understood your request but had trouble processing the response. Please try again."
+            };
+        }
+
+        if (result.analysis) {
+            console.log("[Vibe] AI Analysis:", result.analysis);
+        }
+
+        return result;
+    }
+
+    // 7. Robust JSON Parser (The "JSON Shield")
+    function tryParseJSON(str: string) {
+        if (!str) return null;
+        try {
+            // 1. Strip Markdown Code Blocks
+            let cleanStr = str.replace(/```json\s*|\s*```/g, "").trim();
+
+            // 2. Attempt Direct Parse
+            return JSON.parse(cleanStr);
+        } catch (e) {
+            console.warn("[Vibe] Direct JSON parse failed. Engaging Shield Protocols...", e);
+
+            try {
+                // 3. Extract JSON Payload (Find first '{' and last '}')
+                const firstOpen = str.indexOf('{');
+                const lastClose = str.lastIndexOf('}');
+
+                if (firstOpen !== -1 && lastClose !== -1 && lastClose > firstOpen) {
+                    let candidate = str.substring(firstOpen, lastClose + 1);
+
+                    // 4. Sanitize Keys (Force-quote unquoted keys)
+                    // Regex looks for keys that are NOT quoted and followed by a colon
+                    // e.g. { key: "val" } -> { "key": "val" }
+                    // Note: This is a heuristic and might need further refinement for complex cases
+                    candidate = candidate.replace(/([{,]\s*)([a-zA-Z0-9_]+?)\s*:/g, '$1"$2":');
+
+                    // 5. Remove Trailing Commas
+                    candidate = candidate.replace(/,\s*}/g, '}').replace(/,\s*]/g, ']');
+
+                    return JSON.parse(candidate);
+                }
+            } catch (e2) {
+                console.error("[Vibe] JSON Shield failed.", e2);
+            }
+            return null;
+        }
+    }
+
+    async function callGeminiRedline(
+        apiKey: string, 
+        model: string, 
+        instruction: string, 
+        originalText: string,
+        cacheId: string | null
+    ): Promise<string> {
+        const cleanModel = (model || "gemini-2.0-flash-exp").replace(/^models\//, "");
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${apiKey}`;
+
+        // Analyze if this instruction references previous work
+        const contextAnalysis = analyzePromptForReferences(instruction, cacheState.changelog);
+        
+        let contextNote = "";
+        if (cacheId) {
+            contextNote = "You have the full contract in context. Use this to ensure accurate cross-references (e.g., 'subject to Section 12' or 'as defined above').";
+        }
+        
+        let referenceNote = "";
+        if (contextAnalysis.includeHistory && contextAnalysis.relevantEntries.length > 0) {
+            const lastChange = contextAnalysis.relevantEntries[0];
+            referenceNote = "\nUser may be referencing recent change: " + lastChange.description;
+        }
+
+        const systemInstruction = `SYSTEM: You are a strict legal editor.
+    ${contextNote}
+    ${referenceNote}
+
+    IMPORTANT: Apply ONLY what the instruction asks for. Do not carry over specific values from other clauses unless explicitly requested.
+
+    Return ONLY the modified legal text. No markdown. No quotes. No LaTeX. Preserve placeholders like [Name].`;
+
+        const fullPrompt = `ORIGINAL TEXT: "${originalText}"\n\nINSTRUCTION: ${instruction}`;
+
+        const requestBody: any = {
+            contents: [{ parts: [{ text: `${systemInstruction}\n\n${fullPrompt}` }] }]
+        };
+        
+        if (cacheId) {
+            requestBody.cachedContent = cacheId;
+        }
+
+        const response = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(requestBody)
+        });
+
+        if (!response.ok) {
+            // Log the actual error for debugging
+            const errorData = await response.json().catch(() => ({}));
+            const errorMsg = errorData.error?.message || `HTTP ${response.status}`;
+            console.error("[Vibe] Redline API Error:", response.status, errorMsg);
+            console.error("[Vibe] Original text was:", originalText.substring(0, 100) + "...");
+            throw new Error(`Redline Error: ${errorMsg}`);
+        }
+        const data = await response.json();
+        return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || originalText;
+    }
+
+    // ==========================================
+    // V8.0 COMPILER PATTERN (Tag-Based Abstraction)
+    // ==========================================
+
+    interface StyleToken {
+        token: string; // "S1", "S2"
+        styleId: string;
+        styleName: string;
+    }
+
+    // 1. Generate Style Menu (The "Menu of Dishes")
+    async function generateStyleMenuAndCache(context: Word.RequestContext, paragraphs: Word.ParagraphCollection): Promise<{ styleCache: Map<string, StyleToken>, menu: string }> {
+        console.log("[Vibe] Generating Style Menu (Universal Menu)...");
+
+        // 1. Load Styles (include text for debug logging and sample extraction)
+        paragraphs.load("text, style, styleId");
+        await context.sync();
+
+        // DEBUG: Log what styles we actually have
+        console.log("[Vibe Debug] Scanning paragraph styles (first 5):");
+        for (let i = 0; i < Math.min(5, paragraphs.items.length); i++) {
+            const p = paragraphs.items[i];
+            console.log(`  [${i}] styleId="${p.styleId}" style="${p.style}" text="${(p.text || "").substring(0, 30)}"`);
+        }
+
+        const styleCache = new Map<string, StyleToken>();
+        const menuLines = [];
+        const seenStyles = new Map<string, { styleName: string, index: number }>();
+
+        // 2. Scan for unique styles - USE style (display name) NOT styleId
+        for (let i = 0; i < paragraphs.items.length; i++) {
+            const p = paragraphs.items[i];
+            
+            // Use display name as primary identifier (styleId returns undefined in Word Online)
+            const styleName = p.style || "Normal";
+
+            if (!seenStyles.has(styleName) && styleName) {
+                console.log(`[Vibe Debug] Found style: "${styleName}"`);
+                seenStyles.set(styleName, { styleName, index: i });
+            }
+        }
+
+        // REFACTOR: Force Include Standard Styles (Universal Menu) - use display names
+        const standardStyles = [
+            { id: "Normal", name: "Normal" },
+            { id: "Heading 1", name: "Heading 1" },
+            { id: "Heading 2", name: "Heading 2" },
+            { id: "Heading 3", name: "Heading 3" }
+        ];
+
+        standardStyles.forEach(style => {
+            if (!seenStyles.has(style.id)) {
+                console.log(`[Vibe] Force adding standard style: ${style.name}`);
+                seenStyles.set(style.id, { styleName: style.name, index: -1 }); // -1 indicates no sample text available
+            }
+        });
+
+        // 3. Build Cache and Menu - use styleName for both ID and name
+        const styleNames = Array.from(seenStyles.keys());
+        let tokenCount = 1;
+
+        for (const styleName of styleNames) {
+            const info = seenStyles.get(styleName);
+            const token = `S${tokenCount++}`;
+
+            // Word accepts display names for p.style assignment
+            styleCache.set(token, {
+                token,
+                styleId: styleName,      // Use display name (Word accepts this)
+                styleName: styleName
+            });
+
+            // Build Menu Line
+            let category = "BODY";
+            const sLower = styleName.toLowerCase();
+            if (sLower.includes("heading") || sLower.includes("title")) category = "HEADING";
+            else if (sLower.includes("list") || sLower.includes("number")) category = "LIST";
+
+            // Get sample text
+            let sample = "Standard Style";
+            if (info.index >= 0) {
+                const p = paragraphs.items[info.index];
+                try { sample = (p.text || "").substring(0, 30).replace(/\n/g, " "); } catch (e) {}
+            }
+
+            // FIX: Use JSON.stringify to handle quotes and special characters safely
+            const menuObj = { id: token, name: styleName, type: category, sample: sample };
+            menuLines.push(JSON.stringify(menuObj));
+        }
+
+        console.log(`[Vibe] Menu built with ${menuLines.length} items.`);
+        return { styleCache, menu: menuLines.join("\n") };
+    }
+
+    // 3. Parse Markdown to OXML Runs (for inline bold/italic)
+    interface TextSegment {
+        text: string;
+        bold: boolean;
+        italic: boolean;
+    }
+
+    function parseMarkdownToSegments(content: string): TextSegment[] {
+        const segments: TextSegment[] = [];
+        // Regex to match **bold**, *italic*, or plain text
+        const regex = /(\*\*(.+?)\*\*)|(\*([^*]+?)\*)|([^*]+)/g;
+        let match;
+
+        while ((match = regex.exec(content)) !== null) {
+            if (match[2]) {
+                // **bold**
+                segments.push({ text: match[2], bold: true, italic: false });
+            } else if (match[4]) {
+                // *italic*
+                segments.push({ text: match[4], bold: false, italic: true });
+            } else if (match[5]) {
+                // plain text
+                segments.push({ text: match[5], bold: false, italic: false });
+            }
+        }
+
+        return segments.length > 0 ? segments : [{ text: content, bold: false, italic: false }];
+    }
+
+    function createFormattedRuns(xmlDoc: Document, segments: TextSegment[], WORD_NS: string): Element[] {
+        const runs: Element[] = [];
+
+        for (const seg of segments) {
+            if (!seg.text || seg.text.length === 0) continue;
+
+            const run = xmlDoc.createElementNS(WORD_NS, "w:r");
+
+            // Add formatting if needed
+            if (seg.bold || seg.italic) {
+                const rPr = xmlDoc.createElementNS(WORD_NS, "w:rPr");
+                if (seg.bold) {
+                    const b = xmlDoc.createElementNS(WORD_NS, "w:b");
+                    rPr.appendChild(b);
+                }
+                if (seg.italic) {
+                    const i = xmlDoc.createElementNS(WORD_NS, "w:i");
+                    rPr.appendChild(i);
+                }
+                run.appendChild(rPr);
+            }
+
+            const t = xmlDoc.createElementNS(WORD_NS, "w:t");
+            t.setAttribute("xml:space", "preserve");
+            t.textContent = seg.text;
+            run.appendChild(t);
+
+            runs.push(run);
+        }
+
+        return runs;
+    }
+
+    // 4. Insert Blocks (V10.1 - With Inline Formatting Support)
+    async function insertBlocks(context: Word.RequestContext, blocks: any[], styleCache: Map<string, StyleToken>, insertLocation: Word.Paragraph, analysis?: any) {
+        console.log(`[Vibe] Inserting ${blocks.length} blocks (with inline formatting)...`);
+
+        let lastInsert = insertLocation;
+        let insertedCount = 0;
+
+        const parser = new DOMParser();
+        const serializer = new XMLSerializer();
+        const WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
+        // Track the initial location
+        context.trackedObjects.add(lastInsert);
+        
+        // V10.1 FIX: Fetch OXML from insertion location BEFORE Phase 1 to get document's actual font
+        const insertLocationOxmlResult = insertLocation.getOoxml();
+        await context.sync();
+        
+        // Extract font info from insertion location (this has the REAL document font)
+        let docRFonts: Node | null = null;
+        let docSz: Node | null = null;
+        let docSzCs: Node | null = null;
+        
+        try {
+            const locationXml = parser.parseFromString(insertLocationOxmlResult.value, "text/xml");
+            const locationRuns = locationXml.getElementsByTagNameNS(WORD_NS, "r");
+            if (locationRuns.length > 0) {
+                const firstRun = locationRuns[0] as Element;
+                const rPr = firstRun.getElementsByTagNameNS(WORD_NS, "rPr")[0];
+                if (rPr) {
+                    docRFonts = rPr.getElementsByTagNameNS(WORD_NS, "rFonts")[0] || null;
+                    docSz = rPr.getElementsByTagNameNS(WORD_NS, "sz")[0] || null;
+                    docSzCs = rPr.getElementsByTagNameNS(WORD_NS, "szCs")[0] || null;
+                    if (docRFonts) {
+                        console.log("[Vibe] Captured document font:", (docRFonts as Element).getAttribute("w:ascii"));
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn("[Vibe] Could not extract font from insertion location:", e);
+        }
+
+        // ===============================================
+        // PHASE 1: ANCHOR & STYLE (API)
+        // ===============================================
+        const insertedParagraphs: Word.Paragraph[] = [];
+        const blockMetadata: { styleToken: string, content: string, originalContent: string }[] = [];
+
+        for (const block of blocks) {
+            const styleToken = block.styleId;
+            const content = block.content;
+
+            if (!content) continue;
+
+            const tokenData = styleCache.get(styleToken);
+            // CRUCIAL: Use Display Name (e.g., "Heading 1"), not Internal ID (e.g., "Heading1")
+            const targetStyleName = tokenData ? tokenData.styleName : "Normal";
+            const cleanContent = stripMarkdownFormatting(content);
+
+            // API Insert
+            const newP = lastInsert.insertParagraph(cleanContent, "After");
+
+            // API Style
+            newP.style = targetStyleName;
+
+            // Track for Phase 2
+            context.trackedObjects.add(newP);
+            insertedParagraphs.push(newP);
+            blockMetadata.push({ styleToken, content: cleanContent, originalContent: content });
+
+            lastInsert = newP;
+            insertedCount++;
+        }
+
+        // SYNC: Bake Structure & Style
+        await context.sync();
+        console.log("[Vibe] Phase 1 Complete: Structure & Style baked.");
+
+        // ===============================================
+        // PHASE 2: THE REDLINE SWAP (OXML)
+        // ===============================================
+
+        // Batch Fetch OXML
+        const oxmlResults: OfficeExtension.ClientResult<string>[] = [];
+        for (const p of insertedParagraphs) {
+            oxmlResults.push(p.getOoxml());
+        }
+
+        // SYNC: Fetch OXML
+        await context.sync();
+
+        // Process & Apply Redlines
+        for (let i = 0; i < insertedParagraphs.length; i++) {
+            const p = insertedParagraphs[i];
+            const originalOxml = oxmlResults[i].value;
+            const meta = blockMetadata[i];
+
+            try {
+                const insId = Math.floor(Math.random() * 10000000).toString();
+                const date = new Date().toISOString();
+
+                // Parse OXML
+                const xmlDoc = parser.parseFromString(originalOxml, "text/xml");
+                const pNode = xmlDoc.getElementsByTagNameNS(WORD_NS, "p")[0] || xmlDoc.getElementsByTagName("w:p")[0];
+
+                if (pNode) {
+                    // STRICT MUTATION STRATEGY:
+                    // 1. Verify pPr exists (contains Style ID) - DO NOT MODIFY IT.
+                    // 2. Find all runs (<w:r>).
+                    // 3. Wrap them in <w:ins>.
+                    // 4. Ensure structure: <w:p> <w:pPr/> <w:ins><w:r>...</w:r></w:ins> </w:p>
+
+                    let pPr = pNode.getElementsByTagNameNS(WORD_NS, "pPr")[0] || pNode.getElementsByTagName("w:pPr")[0];
+
+                    // SAFETY NET: If pPr is missing (e.g. Normal style sometimes omits it), create it if needed.
+                    // If the target style is NOT Normal, we MUST have a pPr with pStyle.
+                    if (!pPr && meta.styleToken) {
+                        const tokenData = styleCache.get(meta.styleToken);
+                        if (tokenData && tokenData.styleId !== "Normal") {
+                            console.log(`[Vibe] Safety Net: Injecting missing pPr for ${tokenData.styleId}`);
+                            pPr = xmlDoc.createElementNS(WORD_NS, "w:pPr");
+                            const pStyle = xmlDoc.createElementNS(WORD_NS, "w:pStyle");
+                            pStyle.setAttribute("w:val", tokenData.styleId);
+                            pPr.appendChild(pStyle);
+
+                            // Insert pPr at the beginning of pNode
+                            if (pNode.firstChild) {
+                                pNode.insertBefore(pPr, pNode.firstChild);
+                            } else {
+                                pNode.appendChild(pPr);
+                            }
+                        }
+                    }
+
+                    // V10.0 FIX: Remove direct font formatting (rFonts) from pPr to force style inheritance
+                    // This fixes the "Aptos" vs "Times New Roman" issue
+                    if (pPr) {
+                        const pPr_rPr = pPr.getElementsByTagNameNS(WORD_NS, "rPr")[0] || pPr.getElementsByTagName("w:rPr")[0];
+                        if (pPr_rPr) {
+                            const rFonts = pPr_rPr.getElementsByTagNameNS(WORD_NS, "rFonts")[0] || pPr_rPr.getElementsByTagName("w:rFonts")[0];
+                            if (rFonts) {
+                                console.log("[Vibe] Removing direct font formatting to enforce style inheritance");
+                                pPr_rPr.removeChild(rFonts);
+                            }
+                        }
+                    }
+
+                    // Log pPr presence for debugging
+                    console.log(`[Vibe Debug] pPr present: ${!!pPr}`);
+
+                    // Remove existing runs (plain text from Phase 1)
+                    const existingRuns = Array.from(pNode.childNodes).filter(n => 
+                        n.localName === "r" || n.nodeName.endsWith(":r")
+                    );
+                    existingRuns.forEach(run => pNode.removeChild(run));
+
+                    // V10.0: Create formatted runs from ORIGINAL content (with **bold** and *italic*)
+                    const segments = parseMarkdownToSegments(meta.originalContent);
+                    const formattedRuns = createFormattedRuns(xmlDoc, segments, WORD_NS);
+
+                    // V10.1 FIX: Apply document font (captured BEFORE Phase 1) to new runs
+                    if (docRFonts || docSz) {
+                        console.log("[Vibe] Applying document font to new runs");
+                        formattedRuns.forEach(run => {
+                            let rPr = run.getElementsByTagNameNS(WORD_NS, "rPr")[0] as Element;
+                            if (!rPr) {
+                                rPr = xmlDoc.createElementNS(WORD_NS, "w:rPr");
+                                run.insertBefore(rPr, run.firstChild);
+                            }
+                            if (docRFonts && !rPr.getElementsByTagNameNS(WORD_NS, "rFonts")[0]) {
+                                rPr.insertBefore(docRFonts.cloneNode(true), rPr.firstChild);
+                            }
+                            if (docSz && !rPr.getElementsByTagNameNS(WORD_NS, "sz")[0]) {
+                                rPr.appendChild(docSz.cloneNode(true));
+                            }
+                            if (docSzCs && !rPr.getElementsByTagNameNS(WORD_NS, "szCs")[0]) {
+                                rPr.appendChild(docSzCs.cloneNode(true));
+                            }
+                        });
+                    }
+
+                    // V10.0: Force bold on clause title if AI analysis says so
+                    const isFirstBlock = (i === 0);
+                    const shouldForceBold = isFirstBlock && analysis?.clauseStyle?.isBold && !meta.originalContent.includes('**');
+
+                    if (shouldForceBold) {
+                        console.log(`[Vibe] Forcing bold on clause title block`);
+                        formattedRuns.forEach(run => {
+                            let rPr = run.getElementsByTagNameNS(WORD_NS, "rPr")[0] as Element;
+                            if (!rPr) {
+                                rPr = xmlDoc.createElementNS(WORD_NS, "w:rPr");
+                                run.insertBefore(rPr, run.firstChild);
+                            }
+                            // Check if <w:b> already exists
+                            if (!rPr.getElementsByTagNameNS(WORD_NS, "b")[0]) {
+                                const b = xmlDoc.createElementNS(WORD_NS, "w:b");
+                                rPr.appendChild(b);
+                            }
+                        });
+                    }
+
+                    // Create ins wrapper and append formatted runs
+                    const insNode = xmlDoc.createElementNS(WORD_NS, "w:ins");
+                    insNode.setAttribute("w:id", insId);
+                    insNode.setAttribute("w:author", getTrackChangeAuthor());
+                    insNode.setAttribute("w:date", date);
+
+                    // Add formatted runs to insNode
+                    formattedRuns.forEach(run => insNode.appendChild(run));
+
+                    // Append insNode to pNode (after pPr)
+                    pNode.appendChild(insNode);
+
+                    console.log(`[Vibe] Formatted ${segments.length} segments for block ${i + 1}`);
+                }
+
+                // Clean Body (Remove sectPr if present)
+                const body = xmlDoc.getElementsByTagNameNS(WORD_NS, "body")[0] || xmlDoc.getElementsByTagName("w:body")[0];
+                if (body) {
+                    const sectPr = body.getElementsByTagNameNS(WORD_NS, "sectPr")[0] || body.getElementsByTagName("w:sectPr")[0];
+                    if (sectPr) body.removeChild(sectPr);
+                }
+
+                // Serialize the ENTIRE document (preserves package structure and namespaces)
+                const finalOxml = serializer.serializeToString(xmlDoc);
+
+                // Execute: Replace the paragraph (pPr is in the OXML, so style should be preserved)
+                p.insertOoxml(finalOxml, "Replace");
+
+            } catch (e) {
+                console.error(`[Vibe] Redline Error for ${meta.styleToken}:`, e);
+                // No fallback needed as content is already there from Phase 1
+            }
+        }
+
+        // SYNC: Execute Redline Inserts
+        await context.sync();
+        console.log("[Vibe] Phase 2 Complete: Redlines applied.");
+
+        // CLEANUP: Clear tracked objects
+        for (const p of insertedParagraphs) {
+            context.trackedObjects.remove(p);
+        }
+        context.trackedObjects.remove(insertLocation);
+
+        await context.sync();
+        console.log(`[Vibe] Inserted ${insertedCount} blocks.`);
+    }
+
+
+    // ==========================================
+    // UI COMPONENTS (React)
+    // ==========================================
+
+    const fontStack = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+
+    const Header = ({ onSettingsClick, onRefreshContext, cacheStatus, focusedSelection, processingStage }) =>
+        React.createElement("div", { style: { borderBottom: "1px solid #e5e5e5", background: "#fff" } },
+            // Main header row
+            React.createElement("div", { style: { padding: "14px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" } },
+                React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "8px" } },
+                    React.createElement("h2", { style: { margin: 0, fontSize: "14px", fontWeight: "600", color: "#111", fontFamily: fontStack } }, "Vibe Legal"),
+                    React.createElement("span", { 
+                        style: { fontSize: "11px", color: "#666", padding: "2px 6px", background: "#f0f0f0", borderRadius: "4px" },
+                        title: cacheStatus === "loaded" ? "Full document context loaded" : cacheStatus === "loading" ? "Loading context..." : "Direct mode (no cache)"
+                    }, cacheStatus === "loaded" ? "Context" : "")
+                ),
+                React.createElement("div", { style: { display: "flex", gap: "8px" } },
+                    React.createElement("button", { 
+                        onClick: onRefreshContext, 
+                        style: { background: "#eee", border: "none", cursor: "pointer", fontSize: "12px", padding: "4px 8px", borderRadius: "4px" },
+                        title: "Refresh AI's knowledge of the document"
+                    }, "Refresh"),
+                    React.createElement("button", { onClick: onSettingsClick, style: { background: "none", border: "none", cursor: "pointer", fontSize: "12px", opacity: 0.7, padding: "4px" } }, "Settings")
+                )
+            ),
+            // Focus indicator bar (only visible when selection exists)
+            focusedSelection && React.createElement("div", { 
+                style: { 
+                    padding: "8px 16px", 
+                    background: "#e3f2fd", 
+                    fontSize: "12px", 
+                    color: "#1565c0",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    borderTop: "1px solid #bbdefb"
+                } 
+            },
+                React.createElement("strong", null, "Focus:"),
+                React.createElement("span", { style: { fontStyle: "italic" } }, 
+                    focusedSelection.length > 40 ? focusedSelection.substring(0, 40) + "..." : focusedSelection
+                )
+            ),
+            // Progress indicator bar (only visible during processing)
+            processingStage && React.createElement("div", { 
+                style: { 
+                    padding: "8px 16px", 
+                    background: "#fff3e0", 
+                    fontSize: "12px", 
+                    color: "#e65100",
+                    borderTop: "1px solid #ffe0b2"
+                } 
+            }, processingStage)
+        );
+
+    const Settings = ({ apiKey, setApiKey, selectedModel, setSelectedModel, authorMode, setAuthorMode, customAuthor, setCustomAuthor, detectedAuthor, onBack }) => {
+        const [status, setStatus] = React.useState("");
+        const [models, setModels] = React.useState([]);
+
+        React.useEffect(() => { if (apiKey) handleSync(); }, []);
+
+        const handleSync = async () => {
+            setStatus("Loading...");
+            try {
+                const list = await fetchModelsFromGoogle(apiKey);
+                setModels(list);
+                setStatus(list.length + " models found");
+                const currentExists = list.find((m) => m.name.replace("models/", "") === selectedModel);
+                if (!currentExists && list.length > 0) setSelectedModel(list[0].name.replace("models/", ""));
+            } catch (e) {
+                setStatus("Error: Check Key");
+                setModels([]);
+            }
+        };
+
+        const handleDone = () => {
+            localStorage.setItem("vibe_api_key", apiKey);
+            localStorage.setItem("vibe_model", selectedModel);
+            localStorage.setItem("vibe_author_mode", authorMode);
+            localStorage.setItem("vibe_custom_author", customAuthor);
+            authorSettings.mode = authorMode;
+            authorSettings.customName = customAuthor;
+            onBack();
+        };
+
+        return React.createElement("div", { style: { padding: "20px", background: "#f9f9f9", height: "100%", fontFamily: fontStack, fontSize: "13px" } },
+            React.createElement("h3", { style: { marginTop: 0, fontSize: "14px", marginBottom: "20px" } }, "Settings"),
+            
+            React.createElement("div", { style: { marginBottom: "20px" } },
+                React.createElement("label", { style: { display: "block", fontWeight: "600", marginBottom: "6px", color: "#444" } }, "API Key"),
+                React.createElement("input", { type: "password", value: apiKey, onChange: (e) => setApiKey(e.target.value), style: { width: "100%", padding: "10px", border: "1px solid #ddd", borderRadius: "6px", fontSize: "13px" }, placeholder: "Enter Gemini API Key" }),
+            ),
+            
+            React.createElement("div", { style: { marginBottom: "20px" } },
+                React.createElement("div", { style: { display: "flex", justifyContent: "space-between", marginBottom: "6px" } },
+                    React.createElement("label", { style: { fontWeight: "600", color: "#444" } }, "Model"),
+                    React.createElement("button", { onClick: handleSync, style: { fontSize: "11px", background: "none", border: "none", color: "#000", textDecoration: "underline", cursor: "pointer" } }, "Refresh"),
+                ),
+                React.createElement("select", { value: selectedModel, onChange: (e) => setSelectedModel(e.target.value), style: { width: "100%", padding: "10px", border: "1px solid #ddd", borderRadius: "6px", fontSize: "13px", background: "#fff" } },
+                    models.length > 0
+                        ? models.map((m) => React.createElement("option", { key: m.name, value: m.name.replace("models/", "") }, m.displayName || m.name))
+                        : React.createElement("option", { value: selectedModel }, selectedModel || "Default"),
+                ),
+                React.createElement("div", { style: { fontSize: "11px", color: "#666", marginTop: "6px" } }, status),
+            ),
+            
+            React.createElement("div", { style: { marginBottom: "20px" } },
+                React.createElement("label", { style: { display: "block", fontWeight: "600", marginBottom: "6px", color: "#444" } }, "Track Changes Attribution"),
+                React.createElement("select", { 
+                    value: authorMode, 
+                    onChange: (e) => setAuthorMode(e.target.value), 
+                    style: { width: "100%", padding: "10px", border: "1px solid #ddd", borderRadius: "6px", fontSize: "13px", background: "#fff", marginBottom: "8px" } 
+                },
+                    React.createElement("option", { value: "auto" }, detectedAuthor ? "Use my name (" + detectedAuthor + ")" : "Use document author (auto-detect)"),
+                    React.createElement("option", { value: "vibe" }, "Vibe AI"),
+                    React.createElement("option", { value: "custom" }, "Custom name...")
+                ),
+                authorMode === "custom" && React.createElement("input", { 
+                    type: "text", 
+                    value: customAuthor, 
+                    onChange: (e) => setCustomAuthor(e.target.value), 
+                    style: { width: "100%", padding: "10px", border: "1px solid #ddd", borderRadius: "6px", fontSize: "13px" }, 
+                    placeholder: "Enter name for track changes" 
+                }),
+                React.createElement("div", { style: { fontSize: "11px", color: "#666", marginTop: "6px" } }, 
+                    authorMode === "auto" ? "Changes will appear as if you made them" : authorMode === "vibe" ? "Changes will be attributed to 'Vibe AI'" : "Changes will use your custom name"
+                ),
+            ),
+            
+            React.createElement("button", { onClick: handleDone, style: { width: "100%", background: "#000", color: "#fff", padding: "12px", border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "600", fontSize: "13px" } }, "Done"),
+        );
+    };
+
+    const Chat = ({ messages }) => {
+        const bottomRef = React.useRef(null);
+        React.useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
+        return React.createElement("div", { style: { flexGrow: 1, overflowY: "auto", padding: "20px", display: "flex", flexDirection: "column", gap: "16px", fontFamily: fontStack } },
+            messages.map((msg, i) =>
+                React.createElement("div", { key: i, style: { alignSelf: msg.role === "user" ? "flex-end" : "flex-start", maxWidth: "90%" } },
+                    React.createElement("div", { style: { background: msg.role === "user" ? "#000" : "#f4f4f4", color: msg.role === "user" ? "#fff" : "#111", padding: "10px 14px", borderRadius: "8px", fontSize: "13px", lineHeight: "1.5" }, dangerouslySetInnerHTML: { __html: renderMarkdown(msg.content) } }),
+                ),
+            ),
+            React.createElement("div", { ref: bottomRef }),
+        );
+    };
+
+    const InputArea = ({ value, onChange, onSend, disabled }) =>
+        React.createElement("div", { style: { padding: "16px", background: "#fff", borderTop: "1px solid #e5e5e5", display: "flex", gap: "10px" } },
+            React.createElement("input", {
+                value: value,
+                onChange: (e) => onChange(e.target.value),
+                onKeyDown: (e) => { if (e.key === 'Enter' && !disabled) onSend(); },
+                placeholder: "Ask or instruct...",
+                disabled: disabled,
+                style: { flexGrow: 1, padding: "12px", border: "1px solid #ddd", borderRadius: "8px", fontSize: "13px", outline: "none", fontFamily: fontStack }
+            }),
+            React.createElement("button", {
+                onClick: onSend,
+                disabled: disabled,
+                style: { width: "48px", height: "48px", background: disabled ? "#eee" : "#000", color: "#fff", border: "none", borderRadius: "8px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" },
+            }, disabled ? "..." : "Send"),
+        );
+
+    // ==========================================
+    // MAIN APP
+    // ==========================================
+
+    const App = () => {
+        const [view, setView] = React.useState("main");
+        const [apiKey, setApiKey] = React.useState("");
+        const [selectedModel, setSelectedModel] = React.useState("gemini-2.0-flash-exp");
+        const [messages, setMessages] = React.useState([{ role: "bot", content: "**Vibe Legal** ready. Select text and give an instruction, or ask questions about your document." }]);
+        const [inputValue, setInputValue] = React.useState("");
+        const [isProcessing, setIsProcessing] = React.useState(false);
+        const [cacheStatus, setCacheStatus] = React.useState<"loaded" | "loading" | "direct">("direct");
+        
+        // Progress indicator state
+        const [processingStage, setProcessingStage] = React.useState<string>("");
+        
+        // Focus mode state (selected text)
+        const [focusedSelection, setFocusedSelection] = React.useState<string>("");
+        
+        // Author attribution state
+        const [authorMode, setAuthorMode] = React.useState<AuthorMode>("auto");
+        const [customAuthor, setCustomAuthor] = React.useState("");
+        const [detectedAuthor, setDetectedAuthor] = React.useState<string | null>(null);
+
+        React.useEffect(() => {
+            const k = localStorage.getItem("vibe_api_key");
+            const m = localStorage.getItem("vibe_model");
+            const am = localStorage.getItem("vibe_author_mode") as AuthorMode;
+            const ca = localStorage.getItem("vibe_custom_author");
+            
+            if (k) setApiKey(k);
+            if (m) setSelectedModel(m);
+            if (am) {
+                setAuthorMode(am);
+                authorSettings.mode = am;
+            }
+            if (ca) {
+                setCustomAuthor(ca);
+                authorSettings.customName = ca;
+            }
+        }, []);
+
+        // Update detected author when it changes in global state
+        React.useEffect(() => {
+            const checkAuthor = setInterval(() => {
+                if (authorSettings.detectedAuthor !== detectedAuthor) {
+                    setDetectedAuthor(authorSettings.detectedAuthor);
+                }
+            }, 500);
+            return () => clearInterval(checkAuthor);
+        }, [detectedAuthor]);
+
+        // NEW: Update cache status periodically
+        React.useEffect(() => {
+            const interval = setInterval(() => {
+                setCacheStatus(getCacheStatus());
+            }, 1000);
+            return () => clearInterval(interval);
+        }, []);
+
+        // NEW: Manual refresh handler
+        const handleRefreshContext = async () => {
+            if (!apiKey) return;
+            setIsProcessing(true);
+            setMessages(p => [...p, { role: "bot", content: "Refreshing document context..." }]);
+            
+            try {
+                await Word.run(async (context) => {
+                    const body = context.document.body;
+                    body.load("text");
+                    await context.sync();
+                    
+                    const result = await refreshCache(apiKey, selectedModel, body.text);
+                    setCacheStatus(getCacheStatus());
+                    
+                    if (result.error) {
+                        setMessages(p => [...p, { role: "bot", content: `Note: ${result.error}` }]);
+                    } else if (result.success) {
+                        setMessages(p => [...p, { role: "bot", content: "Context refreshed. AI now has updated knowledge of your document." }]);
+                    } else {
+                        setMessages(p => [...p, { role: "bot", content: "Cache refresh failed. Using Direct Mode." }]);
+                    }
+                });
+            } catch (e) {
+                setMessages(p => [...p, { role: "bot", content: "Refresh failed: " + (e as Error).message }]);
+            } finally {
+                setIsProcessing(false);
+            }
+        };
+
+        const handleAction = async () => {
+            if (!apiKey) return setView("settings");
+            if (!inputValue.trim()) return;
+
+            const currentInput = inputValue;
+            setInputValue("");
+            setMessages((p) => [...p, { role: "user", content: currentInput }]);
+            setIsProcessing(true);
+            setProcessingStage("Reading document...");
+
+            try {
+                await Word.run(async (context) => {
+                    // FIX: Declare tracked items at the top scope of Word.run
+                    const trackedItems = [];
+
+                    try {
+                        // NEW: Detect document author on first action (if not already detected)
+                        if (!authorSettings.detectedAuthor) {
+                            await detectDocumentAuthor(context);
+                        }
+
+                        // ==========================================
+                        // FOCUS MODE: Check for text selection
+                        // ==========================================
+                        const selection = context.document.getSelection();
+                        selection.load("text");
+                        await context.sync();
+                        
+                        const rawSelectedText = selection.text?.trim() || "";
+                        const hasFocus = rawSelectedText.length > 0;
+                        
+                        if (hasFocus) {
+                            console.log(`[Vibe] Focus Mode: ${rawSelectedText.length} chars selected`);
+                            
+                            // Get accepted text (strips track changes deleted text, keeps inserted)
+                            const { text: acceptedSelectionText, oxml: selectionOxml } = await getAcceptedSelectionText(context);
+                            
+                            setFocusedSelection(acceptedSelectionText.substring(0, 100));
+                            console.log(`[Vibe] Accepted text: ${acceptedSelectionText.length} chars`);
+                            
+                            // FOCUS MODE: Fast path for selected text operations
+                            if (isQuestionIntent(currentInput)) {
+                                // Question about selection - answer based on just the selected clause
+                                setProcessingStage("Analyzing selection...");
+                                
+                                try {
+                                    const answer = await callGeminiQuestion(
+                                        apiKey,
+                                        selectedModel,
+                                        currentInput + "\n\n[User is asking about this specific clause: \"" + acceptedSelectionText.substring(0, 2000) + "\"]",
+                                        acceptedSelectionText,
+                                        cacheState.changelog,
+                                        null
+                                    );
+                                    setMessages(p => [...p, { role: "bot", content: answer }]);
+                                } catch (e) {
+                                    setMessages(p => [...p, { role: "bot", content: "Error: " + (e as Error).message }]);
+                                }
+                                
+                                setProcessingStage("");
+                                setFocusedSelection("");
+                                return;
+                            }
+                            
+                            // Modification on selection - skip router, call redline directly
+                            setProcessingStage("Generating changes...");
+                            
+                            try {
+                                const newText = await callGeminiRedline(
+                                    apiKey,
+                                    selectedModel,
+                                    currentInput,
+                                    acceptedSelectionText,
+                                    null
+                                );
+                                
+                                if (newText !== acceptedSelectionText) {
+                                    setProcessingStage("Applying changes...");
+                                    
+                                    // Apply redline to the original OXML
+                                    const redlineResult = applyRedlineToOxml(selectionOxml, acceptedSelectionText, newText);
+                                    
+                                    if (redlineResult.hasChanges) {
+                                        selection.insertOoxml(redlineResult.oxml, Word.InsertLocation.replace);
+                                        await context.sync();
+                                        
+                                        logChange("MODIFY", "Selection: " + currentInput.substring(0, 100), newText);
+                                        setMessages(p => [...p, { role: "bot", content: "Applied changes to selection." }]);
+                                    } else {
+                                        setMessages(p => [...p, { role: "bot", content: "No changes needed." }]);
+                                    }
+                                } else {
+                                    setMessages(p => [...p, { role: "bot", content: "No changes suggested." }]);
+                                }
+                            } catch (e) {
+                                console.error("[Vibe] Focus mode redline failed:", e);
+                                setMessages(p => [...p, { role: "bot", content: "Error: " + (e as Error).message }]);
+                            }
+                            
+                            setProcessingStage("");
+                            setFocusedSelection("");
+                            return;
+                        }
+                        
+                        // NO SELECTION: Full document mode
+                        setFocusedSelection("");
+
+                        // 1. Load document
+                        const body = context.document.body;
+                        body.load("text");
+                        const paragraphs = context.document.body.paragraphs;
+                        paragraphs.load("text, style, styleId, isListItem");
+                        await context.sync();
+
+                        // Get full document text for cache
+                        const fullDocumentText = body.text;
+
+                        // ==========================================
+                        // QUESTION DETECTION BRANCH
+                        // ==========================================
+                        if (isQuestionIntent(currentInput)) {
+                            console.log("[Vibe] Question detected - using hybrid question handler");
+                            setProcessingStage("Analyzing document...");
+                            
+                            // For short docs, we don't need cache
+                            // For long docs, ensure cache exists
+                            let cacheId: string | null = null;
+                            if (fullDocumentText.length >= CACHE_CONFIG.minCacheChars) {
+                                const cacheResult = await ensureCache(apiKey, selectedModel, fullDocumentText);
+                                cacheId = cacheResult.cacheId;
+                                if (cacheResult.error) {
+                                    console.warn("[Vibe] Cache unavailable for question:", cacheResult.error);
+                                }
+                            }
+                            
+                            try {
+                                const answer = await callGeminiQuestion(
+                                    apiKey,
+                                    selectedModel,
+                                    currentInput,
+                                    fullDocumentText,
+                                    cacheState.changelog,
+                                    cacheId
+                                );
+                                setMessages(p => [...p, { role: "bot", content: answer }]);
+                            } catch (e) {
+                                console.error("[Vibe] Question handler failed:", e);
+                                setMessages(p => [...p, { role: "bot", content: "Failed to analyze: " + (e as Error).message }]);
+                            }
+                            
+                            return; // Done - skip router flow
+                        }
+
+                        // ==========================================
+                        // CHANGE REQUEST FLOW (existing logic)
+                        // ==========================================
+                        
+                        // NEW: Check if cache refresh needed BEFORE this call
+                        if (shouldRefreshCache()) {
+                            const refreshResult = await refreshCache(apiKey, selectedModel, fullDocumentText);
+                            if (refreshResult.error) {
+                                setMessages(p => [...p, { role: "bot", content: `Note: ${refreshResult.error}` }]);
+                            }
+                        }
+
+                        // NEW: Ensure cache exists (creates on first call, reuses after)
+                        const cacheResult = await ensureCache(apiKey, selectedModel, fullDocumentText);
+                        const cacheId = cacheResult.cacheId;
+                        
+                        // Notify user if cache not available
+                        if (cacheResult.error) {
+                            setMessages(p => [...p, { role: "bot", content: `Note: ${cacheResult.error}` }]);
+                        }
+
+                        const mapLines = [];
+                        const lookup = {};
+
+                        // Phase 2: Conditionally load listItem for list paragraphs
+                        for (let i = 0; i < paragraphs.items.length; i++) {
+                            const p = paragraphs.items[i];
+                            if (p.isListItem) {
+                                p.listItem.load("level");
+                            }
+                        }
+                        await context.sync();
+
+                        for (let i = 0; i < paragraphs.items.length; i++) {
+                            const p = paragraphs.items[i];
+                            const id = i + 1;
+                            lookup[id] = p;
+
+                            // FIX: Track object to prevent invalidation during sync() in MODIFY actions
+                            context.trackedObjects.add(p);
+                            trackedItems.push(p);
+
+                            // Truncate for map to save tokens
+                            const text = p.text.substring(0, 150).replace(/\n/g, " ");
+
+                            // ENHANCED MAP: Add Style and List Info
+                            let meta = `{Style: ${p.styleId}}`;
+                            if (p.isListItem) {
+                                try {
+                                    meta += ` {List: Lvl ${p.listItem.level}}`;
+                                } catch (e) {
+                                    // Fallback if listItem not loaded
+                                    meta += ` {List: true}`;
+                                }
+                            }
+
+                            if (text.trim().length > 0) {
+                                mapLines.push(`[${id}] ${meta} ${text}`);
+                            }
+                        }
+
+                        // FIX: Sync immediately to register tracked objects with the host
+                        console.log(`[Vibe] Tracking ${trackedItems.length} paragraphs...`);
+                        await context.sync();
+
+                        const documentMap = mapLines.join("\n");
+                        console.log("[Vibe] Map generated:", mapLines.length, "lines");
+
+                        // v10.0: Generate Style Menu (Menu/Dish Pattern)
+                        const { styleCache, menu: styleMenu } = await generateStyleMenuAndCache(context, paragraphs);
+                        console.log("[Vibe] Style Cache built:", styleCache.size, "tokens");
+                        console.log("[Vibe] Style Menu:\n", styleMenu);
+
+                        // v10.0: Capture Document Snapshot (AI-Driven Analysis)
+                        const snapshot = await captureDocumentSnapshot(context, paragraphs, styleCache);
+                        console.log("[Vibe] Document Snapshot captured:", snapshot.paragraphs.length, "paragraphs");
+
+                        setProcessingStage("Generating response...");
+                        
+                        // 2. Call Router with Style Menu, Snapshot, AND cacheId
+                        const routerResponse = await callGeminiRouter(
+                            apiKey, selectedModel, currentInput, styleMenu, snapshot, cacheId
+                        );
+                        console.log("[Vibe] Router Intent:", routerResponse.intent);
+
+                        // 3. Handle Answer
+                        if (routerResponse.answer) {
+                            setMessages((p) => [...p, { role: "bot", content: routerResponse.answer }]);
+                        }
+
+                        // 4. Handle Actions
+                        if (routerResponse.actions && routerResponse.actions.length > 0) {
+                            const actions = routerResponse.actions;
+
+                            // Split actions by type
+                            const insertActions = actions.filter(a => a.type === "INSERT");
+                            const modifyActions = actions.filter(a => a.type === "MODIFY");
+
+                            // PHASE 1: Process INSERTs (Sequential to preserve order)
+                            if (insertActions.length > 0) {
+                                console.log(`[Vibe] Processing ${insertActions.length} INSERT actions sequentially...`);
+                                for (const action of insertActions) {
+                                    const locId = action.location_id;
+                                    const refP = lookup[locId];
+
+                                    if (refP) {
+                                        try {
+                                            // v10.0: Block-Based Insertion (Menu/Dish Pattern)
+                                            if (action.blocks && Array.isArray(action.blocks)) {
+                                                await insertBlocks(context, action.blocks, styleCache, refP, routerResponse.analysis);
+                                                
+                                                // NEW: Log the change
+                                                const contentPreview = action.blocks.map(b => b.content).join(" ").substring(0, 200);
+                                                logChange("INSERT", `Added ${action.blocks.length} block(s) after paragraph ${locId}`, contentPreview);
+                                                setMessages((p) => [...p, { role: "bot", content: `Inserted ${action.blocks.length} block(s).` }]);
+                                            } else {
+                                                // Fallback for plain text (no blocks)
+                                                console.warn("[Vibe] No blocks found in INSERT content. Using plain text.");
+                                                refP.insertParagraph(stripMarkdownFormatting(action.content || ""), Word.InsertLocation.after);
+                                                await context.sync();
+                                                setMessages((p) => [...p, { role: "bot", content: `Inserted plain text.` }]);
+                                                
+                                                // NEW: Log the change
+                                                logChange("INSERT", `Added text after paragraph ${locId}`, action.content?.substring(0, 200));
+                                            }
+                                        } catch (e) {
+                                            console.warn("[Vibe] Insertion failed.", e);
+                                            setMessages((p) => [...p, { role: "bot", content: `Insertion failed: ${e.message}` }]);
+                                        }
+                                    } else {
+                                        setMessages((p) => [...p, { role: "bot", content: `Invalid location specified.` }]);
+                                    }
+                                }
+                            }
+
+                            // PHASE 2: Process MODIFYs (Parallel)
+                            if (modifyActions.length > 0) {
+                                console.log(`[Vibe] Processing ${modifyActions.length} MODIFY actions in parallel...`);
+                                const modifyTasks = [];
+
+                                // Step 2a: Pre-fetch Data (Batch Load)
+                                for (const action of modifyActions) {
+                                    const targetId = action.target_id;
+                                    const targetP = lookup[targetId];
+                                    if (targetP) {
+                                        targetP.load("text");
+                                        // We need OXML to apply redlines correctly
+                                        const oxml = targetP.getOoxml();
+                                        modifyTasks.push({ action, targetP, oxml });
+                                    } else {
+                                        setMessages((p) => [...p, { role: "bot", content: `Invalid Target ID: ${targetId}` }]);
+                                    }
+                                }
+
+                                if (modifyTasks.length > 0) {
+                                    await context.sync(); // Sync ONCE for all reads
+
+                                    // Step 2b: Parallel Generation
+                                    // MODIFIED: Pass cacheId to redline calls
+                                    const results = await Promise.all(modifyTasks.map(async (task) => {
+                                        try {
+                                            const newText = await callGeminiRedline(
+                                                apiKey, selectedModel, task.action.instruction, task.targetP.text, cacheId
+                                            );
+                                            return { ...task, newText, success: true };
+                                        } catch (e) {
+                                            console.error(`[Vibe] Redline failed for ${task.action.target_id}`, e);
+                                            return { ...task, error: e.message, success: false };
+                                        }
+                                    }));
+
+                                    // Step 2c: Apply Changes (Batch Write)
+                                    let changesApplied = 0;
+                                    for (const res of results) {
+                                        if (res.success) {
+                                            const redlineResult = applyRedlineToOxml(res.oxml.value, res.targetP.text, res.newText);
+                                            if (redlineResult.hasChanges) {
+                                                res.targetP.insertOoxml(redlineResult.oxml, Word.InsertLocation.replace);
+                                                setMessages((p) => [...p, { role: "bot", content: `Modified section.` }]);
+                                                changesApplied++;
+                                                
+                                                // NEW: Log the change
+                                                logChange("MODIFY", `Modified paragraph ${res.action.target_id}: ${res.action.instruction.substring(0, 100)}`);
+                                            } else {
+                                                setMessages((p) => [...p, { role: "bot", content: `No changes needed.` }]);
+                                            }
+                                        } else {
+                                            setMessages((p) => [...p, { role: "bot", content: `Failed to modify: ${res.error}` }]);
+                                        }
+                                    }
+
+                                    // Step 2d: Final Sync
+                                    if (changesApplied > 0) {
+                                        await context.sync();
+                                    }
+                                }
+                            }
+                        }
+                    } finally {
+                        // Cleanup tracked objects (Guaranteed Execution)
+                        if (trackedItems && trackedItems.length > 0) {
+                            console.log(`[Vibe] Cleaning up ${trackedItems.length} tracked objects...`);
+                            trackedItems.forEach(p => context.trackedObjects.remove(p));
+                            await context.sync();
+                        }
+                    }
+                });
+            } catch (e) {
+                console.error(e);
+                setMessages((p) => [...p, { role: "bot", content: "Error: " + e.message }]);
+            } finally {
+                setIsProcessing(false);
+                setProcessingStage("");
+                setFocusedSelection("");
+            }
+        };
+
+        if (view === "settings") {
+            return React.createElement(Settings, {
+                apiKey,
+                setApiKey,
+                selectedModel,
+                setSelectedModel,
+                authorMode,
+                setAuthorMode,
+                customAuthor,
+                setCustomAuthor,
+                detectedAuthor,
+                onBack: () => setView("main")
+            });
+        }
+
+        return React.createElement("div", { style: { display: "flex", flexDirection: "column", height: "100vh", background: "#fff" } },
+            React.createElement(Header, { onSettingsClick: () => setView("settings"), onRefreshContext: handleRefreshContext, cacheStatus: cacheStatus, focusedSelection: focusedSelection, processingStage: processingStage }),
+            React.createElement(Chat, { messages: messages }),
+            React.createElement(InputArea, { value: inputValue, onChange: setInputValue, onSend: handleAction, disabled: isProcessing })
+        );
+    };
+
+    function renderMarkdown(text: string): string {
+        if (!text) return "";
+        return text
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
+            .replace(/\*(.*?)\*/g, "<em>$1</em>")
+            .replace(/\n/g, "<br>");
+    }
+
+
+    // HELPER FUNCTIONS
+    function createTextRun(xmlDoc, text, rPr, isDeleted) {
+        const r = xmlDoc.createElement("w:r");
+        if (rPr) {
+            const newRPr = rPr.cloneNode(true);
+            r.appendChild(newRPr);
+        }
+
+        if (isDeleted) {
+            const delText = xmlDoc.createElement("w:delText");
+            delText.textContent = text;
+            delText.setAttribute("xml:space", "preserve");
+            r.appendChild(delText);
+        } else {
+            const t = xmlDoc.createElement("w:t");
+            t.textContent = text;
+            t.setAttribute("xml:space", "preserve");
+            r.appendChild(t);
+        }
+        return r;
+    }
+
+    function createTrackChange(xmlDoc, type, run) {
+        const wrapper = xmlDoc.createElement(type === 'del' ? "w:del" : "w:ins");
+        wrapper.setAttribute("w:id", Math.floor(Math.random() * 10000).toString());
+        wrapper.setAttribute("w:author", getTrackChangeAuthor());
+        wrapper.setAttribute("w:date", new Date().toISOString());
+        wrapper.appendChild(run);
+        return wrapper;
+    }
+
+
+    Office.onReady(() => ReactDOM.render(React.createElement(App), document.getElementById("root")));
+
+template:
+  content: |
+    <div id="root"></div>
+style:
+  content: |
+    body { margin: 0; padding: 0; }
+libraries: |
+  https://appsforoffice.microsoft.com/lib/1/hosted/office.js
+  https://unpkg.com/react@17/umd/react.development.js
+  https://unpkg.com/react-dom@17/umd/react-dom.development.js
+  https://cdnjs.cloudflare.com/ajax/libs/diff_match_patch/20121119/diff_match_patch.js
