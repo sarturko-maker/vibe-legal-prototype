@@ -1,0 +1,50 @@
+.toolbar {
+    display: flex;
+    gap: 8px;
+    padding: 8px 12px;
+    border-bottom: 1px solid #eee;
+    background: #fafafa;
+}
+
+.toolbar-buttons {
+    display: flex;
+    flex-direction: row;
+    gap: 8px;
+    align-items: center;
+}
+
+.context-wrapper {
+    position: relative;
+}
+
+/* Mind Map button */
+.mindmap-button {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 12px;
+    font-size: 13px;
+    font-weight: 500;
+    background: white;
+    border: 1px solid #e4e4e7;
+    border-radius: 8px;
+    cursor: pointer;
+    color: #52525b;
+}
+
+.mindmap-button:hover:not(:disabled) {
+    background: #f4f4f5;
+}
+
+.mindmap-button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.topic-count {
+    font-size: 11px;
+    background: #e4e4e7;
+    padding: 2px 6px;
+    border-radius: 10px;
+    color: #3f3f46;
+}

@@ -1,0 +1,161 @@
+/* InputArea Component Styles */
+
+.input-area {
+    padding: 12px;
+    background: white;
+    border-top: 1px solid #e0e0e0;
+}
+
+.input-warning {
+    margin-bottom: 8px;
+    padding: 8px 12px;
+    background: #fff3e0;
+    border-radius: 8px;
+    font-size: 12px;
+    color: #e65100;
+}
+
+.input-row {
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
+}
+
+.input-textarea {
+    flex: 1;
+    padding: 12px;
+    border: 1px solid #ddd;
+    border-radius: 12px;
+    resize: none;
+    font-size: 14px;
+    font-family: inherit;
+    line-height: 1.4;
+}
+
+.input-textarea:focus {
+    outline: none;
+    border-color: #1a1a2e;
+}
+
+.input-textarea:disabled {
+    background: #f5f5f5;
+}
+
+.input-send-btn {
+    padding: 12px 20px;
+    border: none;
+    border-radius: 12px;
+    background: #18181b;
+    color: white;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.input-send-btn:hover:not(:disabled) {
+    background: #27272a;
+}
+
+.input-send-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Footer with Preview toggle and Settings */
+.input-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 4px 0;
+}
+
+/* Toggle switch for Preview */
+.toggle-switch {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    background: none;
+    border: none;
+    padding: 0;
+}
+
+.toggle-switch__track {
+    width: 36px;
+    height: 20px;
+    background: #e4e4e7;
+    border-radius: 10px;
+    position: relative;
+    transition: background 0.2s;
+}
+
+.toggle-switch__track--active {
+    background: #18181b;
+}
+
+.toggle-switch__thumb {
+    width: 16px;
+    height: 16px;
+    background: white;
+    border-radius: 50%;
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    transition: transform 0.2s;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.toggle-switch__track--active .toggle-switch__thumb {
+    transform: translateX(16px);
+}
+
+.toggle-switch__label {
+    font-size: 13px;
+    color: #52525b;
+}
+
+/* Settings link in footer */
+.settings-link {
+    position: relative;
+    background: none;
+    border: none;
+    font-size: 13px;
+    color: #52525b;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 4px;
+    transition: all 0.15s;
+}
+
+.settings-link:hover {
+    color: #18181b;
+    background: #f4f4f5;
+}
+
+/* Warning/error dot for Settings (no API key) */
+.settings-link__dot {
+    position: absolute;
+    top: -2px;
+    right: -6px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+}
+
+.settings-link__dot--warning {
+    background: #ef4444;
+    animation: pulse-dot 2s infinite;
+}
+
+@keyframes pulse-dot {
+
+    0%,
+    100% {
+        opacity: 1;
+    }
+
+    50% {
+        opacity: 0.5;
+    }
+}

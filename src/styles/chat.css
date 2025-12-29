@@ -1,0 +1,113 @@
+/* ============================================
+   CHAT - Messages & Conversation
+   ============================================ */
+
+/* Chat Container */
+.chat-container {
+    flex: 1;
+    overflow-y: auto;
+    padding: var(--space-5);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+}
+
+/* Empty State */
+.chat-empty {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: var(--space-8);
+}
+
+.chat-empty__title {
+    font-size: var(--text-lg);
+    font-weight: var(--font-medium);
+    color: var(--text-primary);
+    margin-bottom: var(--space-2);
+}
+
+.chat-empty__subtitle {
+    font-size: var(--text-base);
+    color: var(--text-tertiary);
+    line-height: 1.6;
+    max-width: 280px;
+}
+
+/* Message Wrapper */
+.chat-message {
+    max-width: 88%;
+    animation: slideUp 0.3s ease-out;
+}
+
+.chat-message--user {
+    margin-left: auto;
+}
+
+.chat-message--bot {
+    margin-right: auto;
+}
+
+/* Message Bubble */
+.chat-bubble {
+    padding: var(--space-3) var(--space-4);
+    font-size: var(--text-base);
+    line-height: 1.6;
+    letter-spacing: -0.01em;
+}
+
+.chat-bubble--user {
+    background: var(--bg-dark);
+    color: var(--text-inverse);
+    border-radius: var(--radius-xl) var(--radius-xl) var(--radius-sm) var(--radius-xl);
+}
+
+.chat-bubble--bot {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    border-radius: var(--radius-xl) var(--radius-xl) var(--radius-xl) var(--radius-sm);
+}
+
+.chat-bubble p {
+    white-space: pre-wrap;
+    margin: 0;
+}
+
+/* Loading Indicator */
+.chat-loading {
+    max-width: 88%;
+    margin-right: auto;
+    animation: slideUp 0.3s ease-out;
+}
+
+.chat-loading__bubble {
+    padding: var(--space-3) var(--space-4);
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-xl) var(--radius-xl) var(--radius-xl) var(--radius-sm);
+}
+
+.loading-dots {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    padding: var(--space-1) 0;
+}
+
+.loading-dots__dot {
+    width: 5px;
+    height: 5px;
+    background: var(--neutral-400);
+    border-radius: 50%;
+    animation: typing 1.4s ease-in-out infinite;
+}
+
+.loading-dots__dot:nth-child(2) {
+    animation-delay: 200ms;
+}
+
+.loading-dots__dot:nth-child(3) {
+    animation-delay: 400ms;
+}

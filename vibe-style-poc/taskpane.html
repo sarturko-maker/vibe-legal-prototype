@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <title>Vibe Style POC</title>
+    <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js" type="text/javascript"></script>
+    
+    <!-- Import our modules -->
+    <script src="styleManager.js" type="text/javascript"></script>
+    <script src="geminiPrompt.js" type="text/javascript"></script>
+    <script src="insertionEngine.js" type="text/javascript"></script>
+
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; padding: 10px; }
+        button { padding: 8px 16px; margin-bottom: 10px; cursor: pointer; background: #0078d4; color: white; border: none; }
+        button:disabled { background: #ccc; }
+        #output { margin-top: 20px; border: 1px solid #ccc; padding: 10px; min-height: 100px; background: #f9f9f9; white-space: pre-wrap; }
+        .error { color: red; }
+    </style>
+</head>
+<body>
+    <h2>Vibe Style POC</h2>
+    <p>Select a location in the document and click below.</p>
+    
+    <div>
+        <label>API Key:</label>
+        <input type="password" id="apiKey" placeholder="Enter Gemini API Key" style="width: 100%; margin-bottom: 10px;">
+    </div>
+
+    <button id="runBtn">Redline Selection (Mock)</button>
+    <button id="runRealBtn">Redline Selection (Real AI)</button>
+
+    <div id="status">Ready</div>
+    <div id="output"></div>
+
+    <script>
+        Office.onReady((info) => {
+            if (info.host === Office.HostType.Word) {
+                document.getElementById("runBtn").onclick = runMock;
+                document.getElementById("runRealBtn").onclick = runReal;
+            }
+        });
+
+        async function runMock() {
+            await runFlow(true);
+        }
+
+        async function runReal() {
+            await runFlow(false);
+        }
+
+        async function runFlow(isMock) {
+            const output = document.getElementById("output");
+            const status = document.getElementById("status");
+            const apiKey = document.getElementById("apiKey").value;
+
+            if (!isMock && !apiKey) {
+                status.innerText = "Error: API Key required for real run.";
+                return;
+            }
+
+            status.innerText = "Processing...";
+            output.innerText = "";
+
+            try {
+                await Word.run(async (context) => {
+                    // 1. Get Styles
+                    status.innerText = "Scanning styles...";
+                    const styles = await StyleManager.getParagraphStyles(context);
+                    output.innerText += `Found ${styles.length} styles.\n`;
+
+                    // 2. Generate Prompt
+                    const prompt = GeminiPrompt.generateSystemPrompt(styles);
+                    // output.innerText += `\n--- System Prompt ---\n${prompt}\n-------------------\n`;
+
+                    // 3. Get AI Response (Mock or Real)
+                    status.innerText = "Calling AI...";
+                    let aiResponse;
+
+                    if (isMock) {
+                        // Mock Response
+                        aiResponse = {
+                            blocks: [
+                                { text: "1. Mock Heading", styleId: "Heading1" },
+                                { text: "This is a mock paragraph inserted with Normal style.", styleId: "Normal" },
+                                { text: "This is another paragraph with Heading 2.", styleId: "Heading2" }
+                            ]
+                        };
+                        await new Promise(r => setTimeout(r, 1000)); // Simulate delay
+                    } else {
+                        // Real Call
+                        const userPrompt = "Generate a sample confidentiality clause with a heading and two paragraphs.";
+                        aiResponse = await callGemini(apiKey, prompt, userPrompt);
+                    }
+
+                    output.innerText += `\nAI Response received: ${aiResponse.blocks.length} blocks.\n`;
+
+                    // 4. Insert Content
+                    status.innerText = "Inserting content...";
+                    const selection = context.document.getSelection();
+                    await InsertionEngine.insertBlocks(context, selection, aiResponse.blocks);
+
+                    status.innerText = "Done!";
+                    output.innerText += "\nInsertion Complete.";
+                });
+            } catch (error) {
+                console.error(error);
+                status.innerText = "Error: " + error.message;
+                output.innerText += `\nError: ${error.message}`;
+            }
+        }
+
+        // Simple Gemini Call Helper
+        async function callGemini(key, systemPrompt, userPrompt) {
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${key}`;
+            
+            const payload = {
+                contents: [
+                    { role: "user", parts: [{ text: systemPrompt + "\n\nUser Request: " + userPrompt }] }
+                ],
+                generationConfig: {
+                    responseMimeType: "application/json"
+                }
+            };
+
+            const response = await fetch(url, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+
+            if (!response.ok) {
+                throw new Error(`Gemini API Error: ${response.statusText}`);
+            }
+
+            const data = await response.json();
+            const text = data.candidates[0].content.parts[0].text;
+            return JSON.parse(text);
+        }
+    </script>
+</body>
+</html>

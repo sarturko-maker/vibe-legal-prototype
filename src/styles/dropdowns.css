@@ -1,0 +1,225 @@
+/* ============================================
+   DROPDOWNS & POPOVERS - RESPONSIVE
+   ============================================ */
+
+/* 
+ * Popovers are positioned relative to their parent .toolbar__item
+ * They anchor below the button and stay within viewport
+ * Using right: 0 prevents overflow on narrow side panes
+ */
+
+.popover {
+    position: absolute;
+    top: calc(100% + 8px);
+    /* Anchor to right edge of parent to prevent right overflow */
+    right: 0;
+    left: auto;
+    z-index: 100;
+    animation: slideDown 0.2s ease-out;
+    /* Ensure popover doesn't exceed viewport */
+    max-width: calc(100vw - 16px);
+}
+
+.popover__card {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-xl);
+    overflow: hidden;
+    width: max-content;
+    min-width: 240px;
+    max-width: calc(100vw - 32px);
+}
+
+/* On very narrow screens, popover fills available width */
+@media (max-width: 350px) {
+    .popover {
+        left: 0;
+        right: 0;
+        max-width: none;
+    }
+
+    .popover__card {
+        width: 100%;
+        min-width: auto;
+    }
+}
+
+.popover__header {
+    padding: var(--space-3) var(--space-4);
+    border-bottom: 1px solid var(--neutral-100);
+}
+
+.popover__title {
+    font-size: var(--text-base);
+    font-weight: var(--font-semibold);
+    color: var(--text-primary);
+}
+
+.popover__footer {
+    display: flex;
+    border-top: 1px solid var(--neutral-100);
+}
+
+.popover__footer-btn {
+    flex: 1;
+    padding: var(--space-3) var(--space-4);
+    font-size: var(--text-sm);
+    font-weight: var(--font-medium);
+    transition: all var(--transition-fast);
+}
+
+.popover__footer-btn:not(:last-child) {
+    border-right: 1px solid var(--neutral-100);
+}
+
+.popover__footer-btn--secondary {
+    color: var(--text-tertiary);
+}
+
+.popover__footer-btn--secondary:hover {
+    color: var(--text-secondary);
+    background: var(--bg-secondary);
+}
+
+.popover__footer-btn--primary {
+    color: var(--text-primary);
+}
+
+.popover__footer-btn--primary:hover {
+    background: var(--bg-secondary);
+}
+
+/* ============================================
+   SIDE SELECTOR
+   ============================================ */
+
+.side-selector__list {
+    padding: var(--space-1) 0;
+}
+
+.side-selector__option {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-3) var(--space-4);
+    text-align: left;
+    transition: background var(--transition-fast);
+}
+
+.side-selector__option:hover {
+    background: var(--bg-secondary);
+}
+
+.side-selector__option-label {
+    font-size: var(--text-base);
+    color: var(--text-primary);
+}
+
+.side-selector__option-desc {
+    font-size: var(--text-xs);
+    color: var(--text-tertiary);
+    margin-top: 2px;
+}
+
+.side-selector__option-check {
+    width: 6px;
+    height: 6px;
+    background: var(--bg-dark);
+    border-radius: 50%;
+}
+
+/* Custom Party Input */
+.side-selector__custom {
+    padding: var(--space-2) var(--space-4) var(--space-4);
+    border-top: 1px solid var(--neutral-100);
+}
+
+.side-selector__custom-row {
+    display: flex;
+    gap: var(--space-2);
+}
+
+.side-selector__custom-input {
+    flex: 1;
+    padding: var(--space-2) var(--space-3);
+    font-size: var(--text-base);
+    color: var(--text-primary);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-md);
+    outline: none;
+    transition: all var(--transition-fast);
+}
+
+.side-selector__custom-input::placeholder {
+    color: var(--text-muted);
+}
+
+.side-selector__custom-input:focus {
+    background: var(--bg-primary);
+    border-color: var(--neutral-400);
+}
+
+.side-selector__custom-btn {
+    padding: var(--space-2) var(--space-3);
+    font-size: var(--text-sm);
+    font-weight: var(--font-medium);
+    color: var(--text-inverse);
+    background: var(--bg-dark);
+    border-radius: var(--radius-md);
+    transition: all var(--transition-fast);
+}
+
+.side-selector__custom-btn:hover:not(:disabled) {
+    background: var(--neutral-800);
+}
+
+.side-selector__custom-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+}
+
+/* ============================================
+   CONTEXT POPOVER
+   ============================================ */
+
+.context-popover__body {
+    padding: var(--space-4);
+    min-height: 160px;
+}
+
+.context-popover__textarea {
+    width: 100%;
+    height: 112px;
+    min-height: 112px;
+    padding: 10px var(--space-3);
+    font-size: var(--text-base);
+    font-family: inherit;
+    color: var(--text-primary);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-md);
+    outline: none;
+    resize: none;
+    transition: all var(--transition-fast);
+    display: block;
+    box-sizing: border-box;
+}
+
+.context-popover__textarea::placeholder {
+    color: var(--text-muted);
+}
+
+.context-popover__textarea:focus {
+    background: var(--bg-primary);
+    border-color: var(--neutral-400);
+}
+
+.context-popover__char-count {
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    text-align: right;
+    margin-top: var(--space-2);
+}

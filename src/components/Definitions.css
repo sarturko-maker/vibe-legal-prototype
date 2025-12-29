@@ -1,0 +1,170 @@
+/**
+ * Definitions Component Styles
+ */
+
+.definitions-popover {
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 0;
+    width: 320px;
+    max-height: 420px;
+    background: white;
+    border: 1px solid #e4e4e7;
+    border-radius: 12px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    animation: popover-in 0.15s ease-out;
+}
+
+@keyframes popover-in {
+    from {
+        opacity: 0;
+        transform: translateY(-4px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.definitions-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px 16px;
+    border-bottom: 1px solid #e4e4e7;
+}
+
+.definitions-title {
+    font-weight: 600;
+    font-size: 14px;
+    color: #18181b;
+}
+
+.definitions-close-btn {
+    background: none;
+    border: none;
+    font-size: 18px;
+    color: #71717a;
+    cursor: pointer;
+    padding: 4px 8px;
+    line-height: 1;
+    border-radius: 4px;
+}
+
+.definitions-close-btn:hover {
+    background: #f4f4f5;
+    color: #18181b;
+}
+
+.definitions-search {
+    margin: 12px 12px 8px;
+    padding: 8px 12px;
+    border: 1px solid #e4e4e7;
+    border-radius: 8px;
+    font-size: 13px;
+    font-family: inherit;
+}
+
+.definitions-search:focus {
+    outline: none;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
+}
+
+.definitions-search::placeholder {
+    color: #a1a1aa;
+}
+
+.definitions-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0 12px 12px;
+}
+
+.definitions-group {
+    margin-bottom: 4px;
+}
+
+.definitions-letter {
+    font-size: 11px;
+    font-weight: 600;
+    color: #6b7280;
+    padding: 10px 0 6px;
+    border-bottom: 1px solid #f3f4f6;
+    position: sticky;
+    top: 0;
+    background: white;
+}
+
+.definition-item {
+    padding: 10px 0;
+    border-bottom: 1px solid #f9fafb;
+}
+
+.definition-item:last-child {
+    border-bottom: none;
+}
+
+.definition-term {
+    font-weight: 500;
+    font-size: 13px;
+    color: #1f2937;
+}
+
+.definition-text {
+    font-size: 12px;
+    color: #6b7280;
+    margin-top: 3px;
+    line-height: 1.4;
+}
+
+.definitions-empty {
+    text-align: center;
+    color: #9ca3af;
+    padding: 32px 16px;
+    font-size: 13px;
+}
+
+/* Term count badge for button */
+.term-count {
+    background: #e5e7eb;
+    color: #374151;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 10px;
+    margin-left: 6px;
+}
+
+/* Definitions button wrapper */
+.definitions-wrapper {
+    position: relative;
+}
+
+/* Definitions button styling */
+.definitions-button {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 12px;
+    font-size: 13px;
+    font-weight: 500;
+    background: white;
+    border: 1px solid #e4e4e7;
+    border-radius: 8px;
+    cursor: pointer;
+    color: #52525b;
+}
+
+.definitions-button:hover {
+    background: #f4f4f5;
+}
+
+.definitions-button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}

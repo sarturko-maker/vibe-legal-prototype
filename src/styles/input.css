@@ -1,0 +1,131 @@
+/* ============================================
+   INPUT AREA
+   ============================================ */
+
+.input-area {
+    padding: var(--space-3) var(--space-5) var(--space-5);
+    border-top: 1px solid var(--border-light);
+    background: var(--bg-primary);
+}
+
+/* Input Row */
+.input-row {
+    position: relative;
+}
+
+.input-textarea {
+    width: 100%;
+    padding: var(--space-3) var(--space-4);
+    padding-right: 64px;
+    /* Space for send button */
+    font-size: var(--text-base);
+    color: var(--text-primary);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-lg);
+    resize: none;
+    outline: none;
+    transition: all var(--transition-fast);
+    min-height: 44px;
+}
+
+.input-textarea::placeholder {
+    color: var(--text-muted);
+}
+
+.input-textarea:focus {
+    background: var(--bg-primary);
+    border-color: var(--neutral-400);
+}
+
+/* Send Button */
+.input-send-btn {
+    position: absolute;
+    right: var(--space-2);
+    top: 50%;
+    transform: translateY(-50%);
+    padding: 6px var(--space-3);
+    font-size: var(--text-sm);
+    font-weight: var(--font-medium);
+    color: var(--text-inverse);
+    background: var(--bg-dark);
+    border-radius: var(--radius-md);
+    transition: all var(--transition-fast);
+}
+
+.input-send-btn:hover:not(:disabled) {
+    background: var(--neutral-800);
+}
+
+.input-send-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+}
+
+/* Input Footer */
+.input-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: var(--space-3);
+}
+
+/* Toggle Switch */
+.toggle-switch {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    cursor: pointer;
+}
+
+.toggle-switch__track {
+    position: relative;
+    width: 32px;
+    height: 18px;
+    background: var(--neutral-300);
+    border-radius: 9px;
+    transition: background var(--transition-fast);
+}
+
+.toggle-switch__track--active {
+    background: var(--bg-dark);
+}
+
+.toggle-switch__thumb {
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 12px;
+    height: 12px;
+    background: var(--bg-primary);
+    border-radius: 50%;
+    box-shadow: var(--shadow-sm);
+    transition: transform var(--transition-fast);
+}
+
+.toggle-switch__track--active .toggle-switch__thumb {
+    transform: translateX(14px);
+}
+
+.toggle-switch__label {
+    font-size: var(--text-xs);
+    color: var(--text-tertiary);
+    transition: color var(--transition-fast);
+}
+
+.toggle-switch:hover .toggle-switch__label {
+    color: var(--text-secondary);
+}
+
+/* Settings Link */
+.settings-link {
+    font-size: var(--text-sm);
+    color: var(--text-tertiary);
+    transition: color var(--transition-fast);
+    padding: var(--space-1) 0;
+    white-space: nowrap;
+}
+
+.settings-link:hover {
+    color: var(--text-primary);
+}

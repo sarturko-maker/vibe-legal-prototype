@@ -1,0 +1,39 @@
+/* FocusIndicator Component Styles */
+
+.focus-indicator {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    background: #e8f4fd;
+    border-bottom: 1px solid #b3d9f7;
+}
+
+.focus-content {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.focus-icon {
+    font-size: 14px;
+}
+
+.focus-label {
+    font-size: 13px;
+    color: #1565c0;
+    font-weight: 500;
+}
+
+.focus-clear {
+    padding: 2px 8px;
+    border: none;
+    background: transparent;
+    color: #666;
+    cursor: pointer;
+    font-size: 14px;
+}
+
+.focus-clear:hover {
+    color: #333;
+}

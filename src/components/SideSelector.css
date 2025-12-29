@@ -1,0 +1,106 @@
+.side-selector {
+    position: relative;
+}
+
+.side-button {
+    background: #f0f0f0;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-size: 13px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    transition: all 0.15s;
+}
+
+.side-button:hover {
+    background: #e8e8e8;
+}
+
+.side-button.active {
+    background: linear-gradient(135deg, #1e3a5f 0%, #2d5a87 100%);
+    color: white;
+    border-color: #1e3a5f;
+}
+
+.side-dropdown {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    margin-top: 4px;
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    min-width: 220px;
+    z-index: 100;
+    overflow: hidden;
+}
+
+.side-dropdown-header {
+    padding: 10px 12px;
+    font-weight: 600;
+    font-size: 12px;
+    text-transform: uppercase;
+    color: #666;
+    background: #f8f9fa;
+    border-bottom: 1px solid #eee;
+}
+
+.side-option {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.side-option:hover {
+    background: #f0f7ff;
+}
+
+.side-option.disabled {
+    color: #999;
+    font-style: italic;
+    cursor: default;
+}
+
+.side-option.disabled:hover {
+    background: transparent;
+}
+
+.side-option input {
+    cursor: pointer;
+    accent-color: #1e3a5f;
+}
+
+.side-option span {
+    font-size: 13px;
+}
+
+.side-no-parties {
+    padding: 12px;
+    text-align: center;
+    color: #666;
+}
+
+.side-no-parties span {
+    display: block;
+}
+
+.side-hint {
+    font-size: 11px;
+    color: #999;
+    margin-top: 4px;
+}
+
+.side-loading,
+.side-message {
+    padding: 10px 12px;
+    font-size: 12px;
+    color: #666;
+    font-style: italic;
+}

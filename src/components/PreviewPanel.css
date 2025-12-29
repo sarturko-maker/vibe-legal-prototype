@@ -1,0 +1,411 @@
+/* ============================================
+   PREVIEW PANEL STYLES
+   Integrated with Design System
+   ============================================ */
+
+/* === Semantic Color Variables for Accept/Reject === */
+.preview-panel {
+    --accept-bg: rgba(16, 185, 129, 0.1);
+    --accept-border: rgba(16, 185, 129, 0.3);
+    --accept-color: #059669;
+    --accept-hover-bg: rgba(16, 185, 129, 0.15);
+    --accept-active-bg: rgba(16, 185, 129, 0.25);
+    --accept-solid-bg: #10b981;
+    --accept-solid-hover: #059669;
+
+    --reject-bg: rgba(239, 68, 68, 0.1);
+    --reject-border: rgba(239, 68, 68, 0.3);
+    --reject-color: #dc2626;
+    --reject-hover-bg: rgba(239, 68, 68, 0.15);
+    --reject-active-bg: rgba(239, 68, 68, 0.25);
+    --reject-solid-bg: #ef4444;
+    --reject-solid-hover: #dc2626;
+}
+
+/* === Panel Container === */
+.preview-panel {
+    background: var(--bg-secondary, #fafafa);
+    border: 1px solid var(--border-light, #e5e5e5);
+    border-radius: var(--radius-lg, 12px);
+    padding: var(--space-4, 16px);
+    margin: var(--space-2, 8px) 0;
+    animation: slideDown 0.25s ease-out;
+}
+
+/* === Header === */
+.preview-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--space-3, 12px);
+    font-weight: var(--font-semibold, 600);
+    font-size: var(--text-sm, 12px);
+    color: var(--text-secondary, #525252);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+/* === Bulk Actions === */
+.bulk-actions {
+    display: flex;
+    gap: var(--space-2, 8px);
+}
+
+.accept-all-btn,
+.reject-all-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1, 4px);
+    padding: var(--space-1, 4px) var(--space-3, 12px);
+    font-size: var(--text-xs, 11px);
+    font-weight: var(--font-medium, 500);
+    border: 1px solid transparent;
+    border-radius: var(--radius-md, 8px);
+    cursor: pointer;
+    transition: all var(--transition-fast, 150ms ease);
+    box-shadow: var(--shadow-sm, 0 1px 2px rgba(0, 0, 0, 0.05));
+}
+
+.accept-all-btn {
+    background: var(--accept-bg);
+    border-color: var(--accept-border);
+    color: var(--accept-color);
+}
+
+.accept-all-btn:hover {
+    background: var(--accept-hover-bg);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 8px rgba(16, 185, 129, 0.2);
+}
+
+.accept-all-btn:active {
+    background: var(--accept-active-bg);
+    transform: translateY(0);
+    box-shadow: none;
+}
+
+.reject-all-btn {
+    background: var(--reject-bg);
+    border-color: var(--reject-border);
+    color: var(--reject-color);
+}
+
+.reject-all-btn:hover {
+    background: var(--reject-hover-bg);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 8px rgba(239, 68, 68, 0.2);
+}
+
+.reject-all-btn:active {
+    background: var(--reject-active-bg);
+    transform: translateY(0);
+    box-shadow: none;
+}
+
+.done-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-1, 4px) var(--space-3, 12px);
+    font-size: var(--text-xs, 11px);
+    font-weight: var(--font-medium, 500);
+    border: 1px solid transparent;
+    border-radius: var(--radius-md, 8px);
+    cursor: pointer;
+    transition: all var(--transition-fast, 150ms ease);
+    background: #3b82f6;
+    color: white;
+    box-shadow: var(--shadow-sm, 0 1px 2px rgba(0, 0, 0, 0.05));
+    min-width: 80px;
+}
+
+.done-btn:hover {
+    background: #2563eb;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 8px rgba(59, 130, 246, 0.2);
+}
+
+.done-btn:active {
+    background: #1d4ed8;
+    transform: translateY(0);
+    box-shadow: none;
+}
+
+/* === Review Summary Section === */
+.review-summary {
+    background: var(--bg-primary, #ffffff);
+    border-radius: var(--radius-md, 8px);
+    border: 1px solid var(--border-light, #e5e5e5);
+    margin-bottom: var(--space-3, 12px);
+    padding: var(--space-3, 12px);
+    animation: slideDown 0.25s ease-out;
+}
+
+.summary-group {
+    margin-bottom: var(--space-2, 8px);
+}
+
+.summary-group:last-child {
+    margin-bottom: 0;
+}
+
+.summary-group__header {
+    font-size: var(--text-xs, 11px);
+    font-weight: var(--font-semibold, 600);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: var(--space-1, 4px);
+    padding-bottom: var(--space-1, 4px);
+    border-bottom: 1px solid var(--border-light, #e5e5e5);
+}
+
+.summary-group--applied .summary-group__header {
+    color: var(--accept-color, #059669);
+}
+
+.summary-group--discarded .summary-group__header {
+    color: var(--reject-color, #dc2626);
+}
+
+.summary-item {
+    font-size: var(--text-sm, 12px);
+    padding: var(--space-1, 4px) 0;
+    padding-left: var(--space-3, 12px);
+    color: var(--text-primary, #171717);
+    line-height: 1.4;
+}
+
+.summary-item--applied {
+    color: var(--text-primary, #171717);
+}
+
+.summary-item--discarded {
+    color: var(--text-muted, #737373);
+    text-decoration: line-through;
+    opacity: 0.85;
+}
+
+/* === Preview List === */
+.preview-list {
+    max-height: 400px;
+    overflow-y: auto;
+    background: var(--bg-primary, #ffffff);
+    border-radius: var(--radius-md, 8px);
+    border: 1px solid var(--border-light, #e5e5e5);
+}
+
+/* === Preview Item === */
+.preview-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    padding: var(--space-3, 12px);
+    border-bottom: 1px solid var(--border-light, #e5e5e5);
+    gap: var(--space-3, 12px);
+    transition: all 0.3s ease;
+    transform-origin: left center;
+}
+
+.preview-item:last-child {
+    border-bottom: none;
+}
+
+.preview-item:hover:not(.accepted):not(.rejected) {
+    background: var(--bg-secondary, #fafafa);
+}
+
+.preview-item.accepted {
+    background: var(--accept-bg);
+    border-left: 3px solid var(--accept-solid-bg);
+    animation: itemAccepted 0.4s ease forwards;
+}
+
+.preview-item.rejected {
+    background: var(--reject-bg);
+    border-left: 3px solid var(--reject-solid-bg);
+    animation: itemRejected 0.4s ease forwards;
+}
+
+.preview-item.rejected .preview-diff {
+    text-decoration: line-through;
+    opacity: 0.5;
+}
+
+/* === Item State Animations === */
+@keyframes itemAccepted {
+    0% {
+        background: var(--accept-bg);
+        transform: scale(1);
+    }
+
+    30% {
+        background: var(--accept-active-bg);
+        transform: scale(1.01);
+    }
+
+    100% {
+        background: var(--accept-bg);
+        transform: scale(1);
+    }
+}
+
+@keyframes itemRejected {
+    0% {
+        background: var(--reject-bg);
+        transform: scale(1);
+        opacity: 1;
+    }
+
+    30% {
+        background: var(--reject-active-bg);
+        transform: scale(0.99);
+    }
+
+    100% {
+        background: var(--reject-bg);
+        transform: scale(1);
+        opacity: 0.7;
+    }
+}
+
+/* === Diff Content === */
+.preview-diff {
+    flex: 1;
+    word-wrap: break-word;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    font-size: var(--text-sm, 12px);
+    color: var(--text-primary, #171717);
+}
+
+/* === Item Action Buttons === */
+.preview-item-actions {
+    display: flex;
+    gap: var(--space-2, 8px);
+    flex-shrink: 0;
+}
+
+.accept-btn-small,
+.reject-btn-small {
+    min-width: 44px;
+    height: 28px;
+    padding: 0 var(--space-2, 8px);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1.5px solid transparent;
+    border-radius: var(--radius-md, 8px);
+    cursor: pointer;
+    font-size: var(--text-xs, 11px);
+    font-weight: var(--font-semibold, 600);
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    transition: all var(--transition-fast, 150ms ease);
+}
+
+/* Accept Button */
+.accept-btn-small {
+    background: var(--accept-bg);
+    border-color: var(--accept-border);
+    color: var(--accept-color);
+}
+
+.accept-btn-small:hover {
+    background: var(--accept-solid-bg);
+    border-color: var(--accept-solid-bg);
+    color: white;
+    transform: scale(1.08);
+    box-shadow: 0 4px 12px rgba(16, 185, 129, 0.35);
+}
+
+.accept-btn-small:active {
+    transform: scale(0.95);
+    box-shadow: 0 2px 6px rgba(16, 185, 129, 0.3);
+}
+
+/* Reject Button */
+.reject-btn-small {
+    background: var(--reject-bg);
+    border-color: var(--reject-border);
+    color: var(--reject-color);
+}
+
+.reject-btn-small:hover {
+    background: var(--reject-solid-bg);
+    border-color: var(--reject-solid-bg);
+    color: white;
+    transform: scale(1.08);
+    box-shadow: 0 4px 12px rgba(239, 68, 68, 0.35);
+}
+
+.reject-btn-small:active {
+    transform: scale(0.95);
+    box-shadow: 0 2px 6px rgba(239, 68, 68, 0.3);
+}
+
+/* === Status Badges === */
+.status-badge {
+    display: inline-flex;
+    align-items: center;
+    font-size: var(--text-xs, 11px);
+    font-weight: var(--font-medium, 500);
+    padding: var(--space-1, 4px) var(--space-2, 8px);
+    border-radius: var(--radius-lg, 12px);
+    flex-shrink: 0;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    animation: badgeReveal 0.35s ease-out forwards;
+}
+
+.status-badge.accepted {
+    background: var(--accept-solid-bg);
+    color: white;
+    box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3);
+}
+
+.status-badge.rejected {
+    background: var(--reject-solid-bg);
+    color: white;
+    box-shadow: 0 2px 8px rgba(239, 68, 68, 0.3);
+}
+
+@keyframes badgeReveal {
+    0% {
+        opacity: 0;
+        transform: scale(0.8) translateX(-8px);
+    }
+
+    60% {
+        opacity: 1;
+        transform: scale(1.05) translateX(0);
+    }
+
+    100% {
+        opacity: 1;
+        transform: scale(1) translateX(0);
+    }
+}
+
+/* === Diff Highlighting === */
+.diff-deleted {
+    background: linear-gradient(120deg, rgba(239, 68, 68, 0.15) 0%, rgba(239, 68, 68, 0.1) 100%);
+    color: var(--reject-color);
+    text-decoration: line-through;
+    padding: 1px 3px;
+    border-radius: 3px;
+    margin: 0 1px;
+}
+
+.diff-added {
+    background: linear-gradient(120deg, rgba(16, 185, 129, 0.15) 0%, rgba(16, 185, 129, 0.1) 100%);
+    color: var(--accept-color);
+    padding: 1px 3px;
+    border-radius: 3px;
+    margin: 0 1px;
+    font-weight: var(--font-medium, 500);
+}
+
+/* === Word Diff Container === */
+.word-diff {
+    line-height: 1.7;
+}
