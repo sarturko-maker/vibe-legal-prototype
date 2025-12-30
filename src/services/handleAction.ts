@@ -1,14 +1,10 @@
 /**
- * Handle Action - Rewritten with Legacy Architecture
+ * Handle Action - Primary document operation coordinator
  * 
- * KEY DIFFERENCES FROM PREVIOUS VERSION:
- * 1. Uses lookup{} object with trackedObjects.add() for live paragraph references
- * 2. All operations execute in SINGLE Word.run context
- * 3. Uses sectionRange.expandTo() for multi-paragraph AMEND (legacy pattern)
- * 4. Uses applyRedlineToOxml for diff application (ported from legacy)
- * 5. Uses insertBlocks for insertions (ported from legacy)
- * 
- * Source: Ported from taskpane.legacy.tsx handleAction pattern
+ * ARCHITECTURE (Native Track Changes + Deterministic Diff):
+ * - All operations use Word.ChangeTrackingMode.trackAll
+ * - AMEND uses diff algorithm to find minimal change
+ * - Preserves user's existing track changes state
  */
 
 import { log, logError, logWarn } from '../utils/logger';
@@ -16,12 +12,13 @@ import { buildRouterSystemPrompt, buildSideInstruction, buildDealContextSection,
 import { callGeminiRouter } from './gemini/client';
 import { ContractMap, ParagraphInfo, Message } from '../types';
 import { buildSimpleContractMap } from './document/contractMap';
-import { applyRedlineToOxml } from './ooxml/applyRedline';
-import { insertBlocks, StyleToken } from './ooxml/insertBlocks';
 import { stripFormattingMarkers } from './formatting/markdownParser';
 import { validateAIResponse, ValidationResult, formatValidationError } from './validation';
 import { buildRiskToleranceInstruction } from '../prompts/riskTolerancePrompt';
 import { RiskTolerance } from '../types/state';
+import { findMinimalChanges } from '../utils/textDiff';
+
+
 
 /**
  * Build conversation context from recent chat history
@@ -536,10 +533,16 @@ export async function executeOperations(
             (b.target_id || 0) - (a.target_id || 0)
         );
 
-        // 2.2 AMENDs - reverse order
-        const sortedAmends = [...amends].sort((a, b) =>
-            (b.target_id || 0) - (a.target_id || 0)
-        );
+        // 2.2 AMENDs - reverse order by target_id, but preserve array order for same target_id
+        // This ensures same-paragraph operations execute in the order AI specified
+        const sortedAmends = [...amends].map((op, idx) => ({ op, originalIndex: idx }))
+            .sort((a, b) => {
+                if (a.op.target_id !== b.op.target_id) {
+                    return (b.op.target_id || 0) - (a.op.target_id || 0); // Different paragraphs: bottom to top
+                }
+                return a.originalIndex - b.originalIndex; // Same paragraph: preserve original order
+            })
+            .map(item => item.op);
 
         // 2.3 INSERTs - Group by Anchor
         const insertsByAnchor = new Map<number, any[]>();
@@ -580,9 +583,14 @@ export async function executeOperations(
                     console.error('[executeOperations] AMEND TARGET MISSING! Available IDs:', Object.keys(lookup).slice(0, 10).join(', '), '...');
                 }
                 const result = await handleAmendOperation(context, op, lookup, author);
-                if (result) successCount++; else errorCount++;
+                if (result.success) {
+                    successCount++;
+                } else {
+                    console.error('[executeOperations] AMEND failed:', result.error || 'Unknown error');
+                    errorCount++;
+                }
             } catch (e: any) {
-                console.error('AMEND failed:', e);
+                console.error('[executeOperations] AMEND exception:', e?.message || e);
                 errorCount++;
             }
         }
@@ -654,82 +662,203 @@ export async function executeOperations(
 }
 
 /**
- * Handle AMEND operation - uses legacy sectionRange.expandTo pattern
+ * Handle AMEND operation - Deterministic Diff for Word-Level Track Changes
+ * 
+ * Uses diff algorithm to find minimal change between original and amended text.
+ * Returns { success: boolean, error?: string } for better error reporting.
  */
 async function handleAmendOperation(
     context: any,
     op: any,
     lookup: { [id: number]: any },
     author: string
-): Promise<boolean> {
-    const targetId = op.target_id;
-    console.log('[handleAmendOperation] Looking for target_id:', targetId, '| Type:', typeof targetId);
-    console.log('[handleAmendOperation] Lookup keys sample:', Object.keys(lookup).slice(0, 5).join(', '));
-
-    let startPara = lookup[targetId];
-    console.log('[handleAmendOperation] Direct lookup result:', startPara ? 'FOUND' : 'NOT FOUND');
-
-    // FALLBACK: If not found by ID, try content-based matching
-    if (!startPara && op.original_text) {
-        console.log('[handleAmendOperation] ID lookup failed, trying content match...');
-        console.log('[handleAmendOperation] original_text snippet:', op.original_text?.substring(0, 50));
-        startPara = await findParagraphByContent(context, op.original_text);
-    }
-
-    if (!startPara) {
-        console.error('[handleAmendOperation] Paragraph not found by ID or content:', targetId);
-        console.error('[handleAmendOperation] Operation details:', JSON.stringify(op, null, 2));
-        return false;
-    }
-
-    // Get range (for AMEND with range, use expandTo like legacy)
-    const endId = op.end_id || targetId;
-    const endPara = lookup[endId] || startPara;
-
-    console.log('[handleAmendOperation] Range: P' + targetId + ' to P' + endId);
-
-    // Create range spanning start to end (LEGACY PATTERN)
-    const range = startPara.getRange('Start').expandTo(endPara.getRange('End'));
-    range.load('text');
-    const rangeOxml = range.getOoxml();
-    await context.sync();
-
-    console.log('[handleAmendOperation] Original text (' + range.text.length + ' chars):', range.text.substring(0, 100));
-    console.log('[handleAmendOperation] Modified text (' + (op.amended_text?.length || 0) + ' chars):', op.amended_text?.substring(0, 100));
-
-    // CRITICAL: Strip markdown markers before applying to document
-    const cleanAmendedText = stripFormattingMarkers(op.amended_text || '');
-
+): Promise<{ success: boolean; error?: string }> {
     try {
-        console.log('[handleAmendOperation] Calling applyRedlineToOxml...');
-        console.log('[handleAmendOperation] OOXML length:', rangeOxml.value?.length || 'undefined');
+        const targetId = op.target_id;
+        console.log('[handleAmendOperation] ══════════════════════════════════════');
+        console.log('[handleAmendOperation] Starting AMEND for target_id:', targetId);
 
-        // Apply redline using legacy engine pattern
-        const result = applyRedlineToOxml(
-            rangeOxml.value,
-            range.text,
-            cleanAmendedText,
-            author
-        );
+        // Step 1: Lookup paragraph
+        console.log('[handleAmendOperation] Step 1: Looking up paragraph...');
+        let startPara = lookup[targetId];
 
-        console.log('[handleAmendOperation] applyRedlineToOxml result - hasChanges:', result.hasChanges);
-
-        if (result.hasChanges) {
-            console.log('[handleAmendOperation] Inserting modified OOXML (length:', result.oxml?.length, ')');
-            range.insertOoxml(result.oxml, Word.InsertLocation.replace);
-            await context.sync();
-            console.log('[handleAmendOperation] SUCCESS');
-            return true;
-        } else {
-            console.log('[handleAmendOperation] No changes detected');
-            return true;  // Not an error, just no changes
+        if (!startPara && op.original_text) {
+            console.log('[handleAmendOperation] ID lookup failed, trying content match...');
+            startPara = await findParagraphByContent(context, op.original_text);
         }
-    } catch (e: any) {
-        console.error('[handleAmendOperation] ERROR in redline/insert phase:', e?.message || e);
-        console.error('[handleAmendOperation] Error stack:', e?.stack);
-        return false;
+
+        if (!startPara) {
+            console.error('[handleAmendOperation] FAILED: Paragraph not found:', targetId);
+            return { success: false, error: `Paragraph ${targetId} not found` };
+        }
+        console.log('[handleAmendOperation] Step 1 DONE: Paragraph found');
+
+        // Step 2: Load paragraph text
+        console.log('[handleAmendOperation] Step 2: Loading paragraph text...');
+        startPara.load('text');
+        await context.sync();
+        const originalText = startPara.text.trim();
+        console.log('[handleAmendOperation] Step 2 DONE: Original text (' + originalText.length + ' chars)');
+        console.log('[handleAmendOperation] Original:', originalText.substring(0, 100));
+
+        // Step 3: Get amended text and calculate diff
+        if (!op.amended_text) {
+            console.error('[handleAmendOperation] FAILED: No amended_text provided');
+            return { success: false, error: 'Missing amended_text' };
+        }
+
+        const amendedText = stripFormattingMarkers(op.amended_text).trim();
+        console.log('[handleAmendOperation] Amended:', amendedText.substring(0, 100));
+
+        // Step 4: Use diff to find all minimal changes
+        console.log('[handleAmendOperation] Step 4: Calculating minimal diffs...');
+        const changes = findMinimalChanges(originalText, amendedText);
+
+        if (changes.length === 0) {
+            console.log('[handleAmendOperation] No changes detected (texts are identical)');
+            return { success: true };
+        }
+
+        console.log('[handleAmendOperation] Step 4 DONE: Found', changes.length, 'changes');
+        changes.forEach((c, i) => {
+            console.log(`[handleAmendOperation]   [${i}] "${c.find_text}" → "${c.replace_text}"`);
+        });
+
+        // Step 5: Load track changes state
+        console.log('[handleAmendOperation] Step 5: Loading track changes state...');
+        context.document.load('changeTrackingMode');
+        await context.sync();
+        const originalMode = context.document.changeTrackingMode;
+        const wasAlreadyTracking = originalMode === Word.ChangeTrackingMode.trackAll
+            || originalMode === Word.ChangeTrackingMode.trackMineOnly
+            || originalMode === 'TrackAll'
+            || originalMode === 'TrackMineOnly';
+        console.log('[handleAmendOperation] Step 5 DONE: Mode =', originalMode);
+
+        // Step 6: Enable track changes
+        console.log('[handleAmendOperation] Step 6: Enabling track changes...');
+        if (!wasAlreadyTracking) {
+            context.document.changeTrackingMode = Word.ChangeTrackingMode.trackAll;
+            await context.sync();
+            console.log('[handleAmendOperation] Track changes ENABLED');
+        }
+
+        // Step 7: Apply changes in REVERSE order (end to start) so positions don't shift
+        console.log('[handleAmendOperation] Step 7: Applying', changes.length, 'changes in reverse order...');
+        let successfulChanges = 0;
+        let failedChanges = 0;
+
+        for (let i = changes.length - 1; i >= 0; i--) {
+            const change = changes[i];
+            console.log(`[handleAmendOperation] Applying change ${changes.length - i}/${changes.length}: "${change.find_text}"`);
+
+            // Validate find_text exists
+            if (!originalText.includes(change.find_text)) {
+                console.warn(`[handleAmendOperation] Skipping change ${i}: find_text not found in original`);
+                failedChanges++;
+                continue;
+            }
+
+            // Search for text
+            let searchResults = startPara.search(change.find_text, { matchCase: true });
+            searchResults.load('items');
+            await context.sync();
+
+            if (searchResults.items.length === 0) {
+                // Try case-insensitive
+                searchResults = startPara.search(change.find_text, { matchCase: false });
+                searchResults.load('items');
+                await context.sync();
+            }
+
+            if (searchResults.items.length === 0) {
+                console.warn(`[handleAmendOperation] Skipping change ${i}: Word search found no results`);
+                failedChanges++;
+                continue;
+            }
+
+            // Replace first match
+            searchResults.items[0].insertText(change.replace_text, Word.InsertLocation.replace);
+            await context.sync();
+            successfulChanges++;
+            console.log(`[handleAmendOperation] Change ${changes.length - i} applied successfully`);
+        }
+
+        // Step 8: Restore state
+        console.log('[handleAmendOperation] Step 8: Restoring track changes state...');
+        if (!wasAlreadyTracking) {
+            context.document.changeTrackingMode = Word.ChangeTrackingMode.off;
+            await context.sync();
+        }
+
+        console.log('[handleAmendOperation] ══════════════════════════════════════');
+        console.log(`[handleAmendOperation] SUCCESS - ${successfulChanges}/${changes.length} changes applied`);
+
+        if (failedChanges > 0) {
+            console.warn(`[handleAmendOperation] ${failedChanges} changes could not be applied`);
+        }
+
+        return { success: true };
+
+    } catch (error: any) {
+        console.error('[handleAmendOperation] ══════════════════════════════════════');
+        console.error('[handleAmendOperation] EXCEPTION:', error?.message || error);
+        console.error('[handleAmendOperation] Stack:', error?.stack);
+        console.error('[handleAmendOperation] ══════════════════════════════════════');
+        return { success: false, error: error?.message || 'Unknown exception' };
     }
 }
+
+/**
+ * Fallback: Apply full paragraph replacement when diff fails
+ */
+async function applyFullParagraphReplacement(
+    context: any,
+    startPara: any,
+    lookup: { [id: number]: any },
+    targetId: number,
+    amendedText: string,
+    op: any
+): Promise<{ success: boolean; error?: string }> {
+    console.warn('[handleAmendOperation] FALLBACK: Using full paragraph replacement');
+
+    try {
+        const endId = op.end_id || targetId;
+        const endPara = lookup[endId] || startPara;
+        const range = startPara.getRange('Start').expandTo(endPara.getRange('End'));
+
+        context.document.load('changeTrackingMode');
+        await context.sync();
+        const originalMode = context.document.changeTrackingMode;
+        const wasAlreadyTracking = originalMode === Word.ChangeTrackingMode.trackAll
+            || originalMode === Word.ChangeTrackingMode.trackMineOnly
+            || originalMode === 'TrackAll'
+            || originalMode === 'TrackMineOnly';
+
+        if (!wasAlreadyTracking) {
+            context.document.changeTrackingMode = Word.ChangeTrackingMode.trackAll;
+            await context.sync();
+        }
+
+        range.insertText(amendedText, Word.InsertLocation.replace);
+        await context.sync();
+
+        if (!wasAlreadyTracking) {
+            context.document.changeTrackingMode = Word.ChangeTrackingMode.off;
+            await context.sync();
+        }
+
+        console.log('[handleAmendOperation] Fallback replacement complete');
+        return { success: true };
+
+    } catch (error: any) {
+        console.error('[handleAmendOperation] Fallback FAILED:', error?.message);
+        return { success: false, error: error?.message || 'Fallback failed' };
+    }
+}
+
+
+
 
 // === STYLE NORMALIZATION ===
 
@@ -769,15 +898,20 @@ export function normalizeStyleName(
 }
 
 /**
- * Handle INSERT operation
- * Supports numbered lists, bullet points, and plain text
- * Enforces track changes
+ * Handle INSERT operation - Uses Native Track Changes with State Preservation
+ * 
+ * Approach:
+ * 1. Detect user's current track changes state
+ * 2. Enable track changes if not already on
+ * 3. Insert paragraph (Word auto-tracks as insertion)
+ * 4. Apply list formatting if reference is a list item
+ * 5. Restore original state
  */
 async function handleInsertOperation(
     context: any,
     op: any,
     lookup: { [id: number]: any },
-    documentStyles: StyleInfo[], // Changed from styleCache for rich style support
+    documentStyles: StyleInfo[],
     author: string
 ): Promise<boolean> {
     const insertAfterId = op.insert_after;
@@ -791,336 +925,156 @@ async function handleInsertOperation(
     const content = op.content || '';
     if (!content) return false;
 
-    console.log(`[handleInsertOperation] Inserting after P${insertAfterId}:`, content.substring(0, 50));
-
-    // CHECK FOR LIST ITEM (Bullet/Numbering)
-    if (op.list_level !== undefined) {
-        // Use existing insertAsListItem helper
-        const result = await insertAsListItem(context, refParagraph, content, op.list_level, author);
-        return result.success;
-    }
-
-    // Check if content looks like a bullet
+    // Clean bullet characters if present (Word will handle formatting)
+    let cleanContent = content;
     if (/^[\u2022\u2023\u25E6\u2043\u2219•]\s/.test(content)) {
-        const cleanContent = content.replace(/^[\u2022\u2023\u25E6\u2043\u2219•]\s/, '');
-        return (await insertAsListItem(context, refParagraph, cleanContent, 0, author)).success;
+        cleanContent = content.replace(/^[\u2022\u2023\u25E6\u2043\u2219•]\s/, '');
     }
 
-    // PLAIN TEXT / STYLE APPLICATION
+    console.log(`[handleInsertOperation] Inserting after P${insertAfterId}:`, cleanContent.substring(0, 50));
+    console.log('[INSERT DEBUG] ========== START ==========');
+    console.log('[INSERT DEBUG] Content to insert:', cleanContent.substring(0, 50));
+
     try {
-        console.log('[handleInsertOperation] Phase 1: Inserting paragraph');
-        const newPara = refParagraph.insertParagraph(content, 'After');
+        // ═══════════════════════════════════════════════════════════
+        // STEP 1: Detect user's current track changes state
+        // ═══════════════════════════════════════════════════════════
+        context.document.load('changeTrackingMode');
+        console.log('[INSERT DEBUG] Loading document tracking state...');
+        refParagraph.load('isListItem');
+        await context.sync();
+        console.log('[INSERT DEBUG] Current changeTrackingMode:', context.document.changeTrackingMode);
 
-        // APPLY STYLE
-        if (op.style) {
-            const normalizedStyle = normalizeStyleName(op.style, documentStyles);
-            if (normalizedStyle) {
-                // Check if style exists/is valid by trying to leverage checking or just set it.
-                // Word will trigger error if style doesn't exist? Or just ignore? usually valid style name required.
-                // Our normalization ensures we use an existing name from `documentStyles`.
-                newPara.style = normalizedStyle;
-                // Important: Load style to verify/sync
-                newPara.load('style');
-                console.log(`[handleInsertOperation] Applied style: ${normalizedStyle}`);
-            } else {
-                console.warn(`[handleInsertOperation] Style "${op.style}" not found in document`);
-            }
-        }
+        const originalMode = context.document.changeTrackingMode;
+        const wasAlreadyTracking = originalMode === Word.ChangeTrackingMode.trackAll
+            || originalMode === Word.ChangeTrackingMode.trackMineOnly
+            || originalMode === 'TrackAll'
+            || originalMode === 'TrackMineOnly';
 
-        // APPLY EXPLICIT FONT (for consistent INSERT formatting - ADR-011)
-        if (op.font) {
-            newPara.font.name = op.font;
-            console.log(`[handleInsertOperation] Applied font: ${op.font}`);
-        }
-        if (op.fontSize) {
-            newPara.font.size = op.fontSize;
-            console.log(`[handleInsertOperation] Applied fontSize: ${op.fontSize}`);
-        }
+        console.log('[handleInsertOperation] Original tracking mode:', originalMode, '| Already tracking:', wasAlreadyTracking);
+        console.log('[handleInsertOperation] Reference isListItem:', refParagraph.isListItem);
 
-        // APPLY EXTENDED FORMATTING
-        if (op.bold !== undefined) {
-            newPara.font.bold = op.bold;
-            console.log(`[handleInsertOperation] Applied bold: ${op.bold}`);
-        }
-        if (op.italic !== undefined) {
-            newPara.font.italic = op.italic;
-            console.log(`[handleInsertOperation] Applied italic: ${op.italic}`);
-        }
-        if (op.underline !== undefined) {
-            newPara.font.underline = op.underline ? 'Single' : 'None';
-            console.log(`[handleInsertOperation] Applied underline: ${op.underline}`);
-        }
-        if (op.color && op.color !== 'auto') {
-            newPara.font.color = op.color;
-            console.log(`[handleInsertOperation] Applied color: ${op.color}`);
-        }
-
+        // ═══════════════════════════════════════════════════════════
+        // STEP 2: Insert EMPTY paragraph (Structural, not tracked yet)
+        // ═══════════════════════════════════════════════════════════
+        console.log('[INSERT DEBUG] Inserting EMPTY paragraph structure...');
+        const newPara = refParagraph.insertParagraph('', 'After');
         context.trackedObjects.add(newPara);
         await context.sync();
 
-        console.log('[handleInsertOperation] Phase 2: Applying track changes');
-        await applyTrackChangesToParagraph(context, newPara, author);
+        // ═══════════════════════════════════════════════════════════
+        // STEP 3: Apply formatting (While empty, before tracking)
+        // ═══════════════════════════════════════════════════════════
 
-        console.log('[handleInsertOperation] SUCCESS');
+        // If reference is a list item and we want list formatting, try to inherit
+        if (refParagraph.isListItem && op.list_level !== undefined) {
+            try {
+                // Try to attach to the same list as reference
+                newPara.load('listItem');
+                await context.sync();
+
+                // Attempt to set list level
+                if (newPara.listItem) {
+                    newPara.listItem.level = op.list_level;
+                    console.log('[handleInsertOperation] Set list level:', op.list_level);
+                }
+            } catch (listError) {
+                console.warn('[handleInsertOperation] Could not set list formatting:', listError);
+            }
+        }
+
+        // Apply style if specified
+        if (op.style) {
+            const normalizedStyle = normalizeStyleName(op.style, documentStyles);
+            if (normalizedStyle) {
+                newPara.style = normalizedStyle;
+                console.log(`[handleInsertOperation] Applied style: ${normalizedStyle}`);
+            } else {
+                console.warn(`[handleInsertOperation] Style "${op.style}" not found`);
+            }
+        }
+
+        // Apply explicit font properties
+        if (op.font) {
+            newPara.font.name = op.font;
+        }
+        if (op.fontSize) {
+            newPara.font.size = op.fontSize;
+        }
+        if (op.bold !== undefined) {
+            newPara.font.bold = op.bold;
+        }
+        if (op.italic !== undefined) {
+            newPara.font.italic = op.italic;
+        }
+        if (op.underline !== undefined) {
+            newPara.font.underline = op.underline ? 'Single' : 'None';
+        }
+        if (op.color && op.color !== 'auto') {
+            newPara.font.color = op.color;
+        }
+
+        await context.sync(); // Commit formatting
+
+        // ═══════════════════════════════════════════════════════════
+        // STEP 4: Enable Track Changes & Insert Content
+        // ═══════════════════════════════════════════════════════════
+
+        // Force Enable TC
+        console.log('[INSERT DEBUG] Setting changeTrackingMode to trackAll...');
+        context.document.changeTrackingMode = Word.ChangeTrackingMode.trackAll;
+        console.log('[handleInsertOperation] Track changes forcibly ENABLED');
+        // CRITICAL SYNC
+        await context.sync();
+
+        // Check if mode stuck
+        context.document.load('changeTrackingMode');
+        await context.sync();
+        console.log('[INSERT DEBUG] Mode verified:', context.document.changeTrackingMode);
+
+        // Insert Text into the styled empty paragraph
+        console.log('[INSERT DEBUG] Inserting content into empty para...');
+        // We use insertText on the paragraph itself (defaults to replace/append depending on usage, 
+        // strictly speaking 'Replace' on an empty para content range is safe)
+        const range = newPara.getRange('Content');
+        // Note: insertText on range returns a new range
+        range.insertText(cleanContent, 'Replace');
+
+        await context.sync();
+
+        // ═══════════════════════════════════════════════════════════
+        // STEP 5: Restore original state
+        // ═══════════════════════════════════════════════════════════
+        if (!wasAlreadyTracking) {
+            console.log('[INSERT DEBUG] Restoring original mode...');
+            context.document.changeTrackingMode = Word.ChangeTrackingMode.off;
+            await context.sync();
+            console.log('[handleInsertOperation] Track changes DISABLED (restored)');
+        } else {
+            console.log('[handleInsertOperation] Track changes left ON (user preference)');
+        }
+
+        console.log('[handleInsertOperation] SUCCESS - Empty-First Strategy applied');
+        console.log('[INSERT DEBUG] ========== END ==========');
         return true;
 
     } catch (e: any) {
-        console.error('[handleInsertOperation] Error:', e?.message || e);
+        console.error('[handleInsertOperation] ERROR:', e?.message || e);
+        console.error('[handleInsertOperation] Error stack:', e?.stack);
         return false;
     }
 }
 
-/**
- * Insert content as a list item with track changes
- * Two-phase approach: 1) Insert structure, 2) Apply track changes
- * CRITICAL: Every code path MUST apply track changes
- */
-async function insertAsListItem(
-    context: any,
-    refParagraph: any,
-    content: string,
-    level: number,
-    author: string
-): Promise<{ success: boolean; inserted: number }> {
 
-    try {
-        refParagraph.load('isListItem');
-        await context.sync();
-
-        console.log('[insertAsListItem] Reference isListItem:', refParagraph.isListItem);
-
-        if (!refParagraph.isListItem) {
-            // Not a list - use plain insert WITH TRACK CHANGES
-            console.warn('[insertAsListItem] Reference is not a list item, using plain insert with track changes');
-            return await insertPlainWithTrackChanges(context, refParagraph, content, author);
-        }
-
-        // Get OOXML and extract numId
-        const ooxmlResult = refParagraph.getOoxml();
-        await context.sync();
-
-        const refOoxml = ooxmlResult.value;
-        console.log('[insertAsListItem] OOXML length:', refOoxml.length);
-
-        // DEBUG: Log actual context around numId
-        const numIdIndex = refOoxml.indexOf('numId');
-        console.log('[insertAsListItem] numId found at index:', numIdIndex);
-        if (numIdIndex !== -1) {
-            console.log('[insertAsListItem] numId context:', refOoxml.substring(numIdIndex - 10, numIdIndex + 50));
-        }
-
-        // More flexible regex - handles various attribute formats
-        const numIdMatch = refOoxml.match(/w:numId[^>]*w:val\s*=\s*"(\d+)"/);
-
-        if (!numIdMatch) {
-            // numId not found - use plain insert WITH TRACK CHANGES
-            console.warn('[insertAsListItem] numId not found, using plain insert with track changes');
-            return await insertPlainWithTrackChanges(context, refParagraph, content, author);
-        }
-
-        const numId = parseInt(numIdMatch[1], 10);
-        console.log('[insertAsListItem] Extracted numId:', numId);
-
-        // ═══════════════════════════════════════════════════════════
-        // PHASE 1: Insert bullet structure
-        // ═══════════════════════════════════════════════════════════
-        const bulletOoxml = buildMinimalBulletOoxml(content, numId, 0);
-        refParagraph.getRange('End').insertOoxml(bulletOoxml, 'After');
-        await context.sync();
-        console.log('[insertAsListItem] Phase 1 complete: Bullet structure inserted');
-
-        // ═══════════════════════════════════════════════════════════
-        // PHASE 2: Apply track changes
-        // ═══════════════════════════════════════════════════════════
-        const nextPara = refParagraph.getNext();
-        nextPara.load('text');
-        context.trackedObjects.add(nextPara);
-        await context.sync();
-
-        console.log('[insertAsListItem] Phase 2: New paragraph text:', nextPara.text?.substring(0, 50) || '(empty)');
-        await applyTrackChangesToParagraph(context, nextPara, author);
-
-        console.log('[insertAsListItem] SUCCESS - inserted with minimal OOXML + track changes');
-        return { success: true, inserted: 1 };
-
-    } catch (e: any) {
-        console.error('[insertAsListItem] Error:', e?.message || e);
-        // CRITICAL: Fallback MUST also apply track changes
-        return await insertPlainWithTrackChanges(context, refParagraph, content, author);
-    }
-}
 
 /**
- * Insert plain paragraph with track changes
- * Two-phase approach ensures track changes are ALWAYS applied
- * Used as fallback when list insertion fails
- */
-async function insertPlainWithTrackChanges(
-    context: any,
-    refParagraph: any,
-    content: string,
-    author: string
-): Promise<{ success: boolean; inserted: number }> {
-
-    try {
-        console.log('[insertPlainWithTrackChanges] Phase 1: Inserting paragraph');
-        const newPara = refParagraph.insertParagraph(content, 'After');
-        context.trackedObjects.add(newPara);
-        await context.sync();
-
-        console.log('[insertPlainWithTrackChanges] Phase 2: Applying track changes');
-        await applyTrackChangesToParagraph(context, newPara, author);
-
-        console.log('[insertPlainWithTrackChanges] SUCCESS');
-        return { success: true, inserted: 1 };
-
-    } catch (e: any) {
-        console.error('[insertPlainWithTrackChanges] Error:', e?.message || e);
-        // Last resort - insert without track changes (better than nothing)
-        try {
-            refParagraph.insertParagraph(content, 'After');
-            await context.sync();
-            console.warn('[insertPlainWithTrackChanges] Inserted WITHOUT track changes (last resort)');
-            return { success: true, inserted: 1 };
-        } catch (lastError) {
-            console.error('[insertPlainWithTrackChanges] Complete failure:', lastError);
-            return { success: false, inserted: 0 };
-        }
-    }
-}
-
-/**
- * Build minimal OOXML for a bullet point paragraph
- * Much smaller (~800 bytes) than cloning full document package (175KB)
- */
-function buildMinimalBulletOoxml(content: string, numId: number, level: number): string {
-    const escapedContent = content
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
-
-    // Note: We don't include w:ins here - track changes will be applied separately
-    // after the paragraph is inserted, because Word Online ignores w:ins in fresh inserts
-    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<pkg:package xmlns:pkg="http://schemas.microsoft.com/office/2006/xmlPackage">
-  <pkg:part pkg:name="/word/document.xml" pkg:contentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml">
-    <pkg:xmlData>
-      <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-        <w:body>
-          <w:p>
-            <w:pPr>
-              <w:numPr>
-                <w:ilvl w:val="${level}"/>
-                <w:numId w:val="${numId}"/>
-              </w:numPr>
-            </w:pPr>
-            <w:r>
-              <w:t>${escapedContent}</w:t>
-            </w:r>
-          </w:p>
-        </w:body>
-      </w:document>
-    </pkg:xmlData>
-  </pkg:part>
-</pkg:package>`;
-}
-
-/**
- * Escape HTML special characters
- */
-function escapeHtml(text: string): string {
-    return text
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#039;');
-}
-
-/**
- * Apply track changes to a paragraph by modifying its OOXML
- * Wraps all runs in w:ins markup
- * Uses getRange('Whole').insertOoxml pattern for proper replacement
- */
-async function applyTrackChangesToParagraph(context: any, paragraph: any, author: string): Promise<void> {
-    try {
-        const ooxmlResult = paragraph.getOoxml();
-        await context.sync();
-
-        const WORD_NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
-        const parser = new DOMParser();
-        const serializer = new XMLSerializer();
-        const xmlDoc = parser.parseFromString(ooxmlResult.value, 'text/xml');
-
-        // Check for parse errors
-        const parseError = xmlDoc.querySelector('parsererror');
-        if (parseError) {
-            console.warn('[applyTrackChangesToParagraph] XML parse error');
-            return;
-        }
-
-        // Find all <w:r> runs in the document
-        const runs = xmlDoc.getElementsByTagNameNS(WORD_NS, 'r');
-        const runsArray = Array.from(runs);
-
-        if (runsArray.length === 0) {
-            console.log('[applyTrackChangesToParagraph] No runs to wrap');
-            return;
-        }
-
-        console.log(`[applyTrackChangesToParagraph] Found ${runsArray.length} runs to wrap`);
-
-        const timestamp = new Date().toISOString();
-        let insId = Math.floor(Math.random() * 10000000);
-
-        for (const run of runsArray) {
-            // Check if already inside w:ins by walking up parent hierarchy
-            let parent = run.parentElement;
-            let alreadyWrapped = false;
-            while (parent) {
-                if (parent.localName === 'ins') {
-                    alreadyWrapped = true;
-                    break;
-                }
-                parent = parent.parentElement;
-            }
-
-            if (alreadyWrapped) {
-                console.log('[applyTrackChangesToParagraph] Run already wrapped, skipping');
-                continue;
-            }
-
-            // Create w:ins wrapper
-            const insNode = xmlDoc.createElementNS(WORD_NS, 'w:ins');
-            insNode.setAttribute('w:id', String(insId++));
-            insNode.setAttribute('w:author', author);
-            insNode.setAttribute('w:date', timestamp);
-
-            // Wrap: insert ins before run, then move run into ins
-            run.parentNode?.insertBefore(insNode, run);
-            insNode.appendChild(run);
-        }
-
-        console.log(`[applyTrackChangesToParagraph] Wrapped ${insId - Math.floor(Math.random() * 10000000)} runs`);
-
-        // Serialize and apply using getRange('Whole').insertOoxml pattern
-        const modifiedOoxml = serializer.serializeToString(xmlDoc);
-        const paraRange = paragraph.getRange('Whole');
-        paraRange.insertOoxml(modifiedOoxml, 'Replace');
-        await context.sync();
-
-        console.log('[applyTrackChangesToParagraph] Track changes applied successfully');
-
-    } catch (e) {
-        console.warn('[applyTrackChangesToParagraph] Error:', e);
-        // Non-fatal - paragraph was still inserted
-    }
-}
-
-/**
- * Handle DELETE operation
- * CRITICAL: Uses track changes (w:del markup) instead of actual deletion
- * This preserves paragraph IDs so subsequent operations target correct content
+ * Handle DELETE operation - Uses Native Track Changes with State Preservation
+ * 
+ * Instead of OOXML manipulation, we:
+ * 1. Detect user's current track changes state
+ * 2. Enable track changes if not already on
+ * 3. Delete the range (Word shows as strikethrough)
+ * 4. Restore original state
  */
 async function handleDeleteOperation(
     context: any,
@@ -1141,51 +1095,56 @@ async function handleDeleteOperation(
         return false;
     }
 
-    console.log('[handleDeleteOperation] Marking as deleted (track change) P' + deleteId);
+    console.log('[handleDeleteOperation] Deleting P' + deleteId + ' with native track changes');
 
-    // Get the paragraph's OOXML and text
-    deletePara.load('text');
-    const rangeOxml = deletePara.getOoxml();
-    await context.sync();
-
-    const originalText = deletePara.text || '';
-
-    // Use applyRedlineToOxml with empty amended_text to create <w:del> track changes
-    // This marks content as deleted WITHOUT actually removing it
-    const result = applyRedlineToOxml(
-        rangeOxml.value,
-        originalText,
-        '',  // Empty string = delete all content
-        'Vibe AI'
-    );
-
-    if (result.hasChanges) {
-        console.log('[handleDeleteOperation] Inserting track-change deleted OOXML');
-        deletePara.insertOoxml(result.oxml, Word.InsertLocation.replace);
+    try {
+        // ═══════════════════════════════════════════════════════════
+        // STEP 1: Detect user's current track changes state
+        // ═══════════════════════════════════════════════════════════
+        context.document.load('changeTrackingMode');
         await context.sync();
-        console.log('[handleDeleteOperation] SUCCESS - marked as deleted with track changes');
+
+        const originalMode = context.document.changeTrackingMode;
+        const wasAlreadyTracking = originalMode === Word.ChangeTrackingMode.trackAll
+            || originalMode === Word.ChangeTrackingMode.trackMineOnly
+            || originalMode === 'TrackAll'
+            || originalMode === 'TrackMineOnly';
+
+        console.log('[handleDeleteOperation] Original tracking mode:', originalMode, '| Already tracking:', wasAlreadyTracking);
+
+        // ═══════════════════════════════════════════════════════════
+        // STEP 2: Enable track changes if not already on
+        // ═══════════════════════════════════════════════════════════
+        // Always force enable track changes and SYNC to ensure it's active
+        context.document.changeTrackingMode = Word.ChangeTrackingMode.trackAll;
+        console.log('[handleDeleteOperation] Track changes forcibly ENABLED');
+        // CRITICAL: Always sync before delete so Word knows TC state
+        await context.sync();
+
+        // ═══════════════════════════════════════════════════════════
+        // STEP 3: Delete the paragraph (Word shows as strikethrough)
+        // ═══════════════════════════════════════════════════════════
+        deletePara.delete();
+        await context.sync();  // Commit the delete immediately
+        console.log('[handleDeleteOperation] Paragraph deleted with track changes');
+
+        // ═══════════════════════════════════════════════════════════
+        // STEP 4: Restore original state (only if we changed it)
+        // ═══════════════════════════════════════════════════════════
+        if (!wasAlreadyTracking) {
+            context.document.changeTrackingMode = Word.ChangeTrackingMode.off;
+            await context.sync();
+            console.log('[handleDeleteOperation] Track changes DISABLED (restored)');
+        } else {
+            console.log('[handleDeleteOperation] Track changes left ON (user preference)');
+        }
+
+        console.log('[handleDeleteOperation] SUCCESS - deleted with native track changes');
         return true;
-    } else {
-        console.log('[handleDeleteOperation] No changes detected');
-        return true;
+
+    } catch (e: any) {
+        console.error('[handleDeleteOperation] ERROR:', e?.message || e);
+        console.error('[handleDeleteOperation] Error stack:', e?.stack);
+        return false;
     }
-}
-
-/**
- * Build style cache for insertBlocks
- */
-async function buildStyleCache(context: any): Promise<Map<string, StyleToken>> {
-    const styleCache = new Map<string, StyleToken>();
-
-    // Add default Normal style
-    styleCache.set('Normal', {
-        token: 'Normal',
-        styleId: 'Normal',
-        styleName: 'Normal'
-    });
-
-    // We could expand this to load document styles if needed
-    // For now, basic Normal support covers most insertion cases
-
-    return styleCache;
 }

@@ -151,15 +151,23 @@ CLAUSE STRUCTURE:
 - Look at paragraph TEXT length to distinguish headings (<50 chars) from body (>50 chars)
 
 OPERATION TYPES:
-1. AMEND_SIMPLE - Modify existing text within a single paragraph
-   { "type": "AMEND_SIMPLE", "target_id": <paragraph_id>, "amended_text": "<new_text>", "scope": "NODE" }
+1. AMEND_SIMPLE - Modify text within a paragraph
+   { 
+     "type": "AMEND_SIMPLE", 
+     "target_id": <paragraph_id>, 
+     "amended_text": "<full rewritten paragraph text>"
+   }
    
-   **CRITICAL: PRESERVE MANUAL CLAUSE NUMBERS**
-   If the original paragraph starts with a manual number like "3.2 " or "4.1 ", you MUST include it in amended_text.
-   Example:
-   - Original: "3.2 Risk of loss passes to the Buyer upon delivery."
-   - CORRECT amended_text: "3.2 Risk of loss passes to the Buyer upon completion of delivery."
-   - WRONG amended_text: "Risk of loss passes to the Buyer upon completion of delivery." (missing "3.2 ")
+   RULES:
+   - amended_text is the COMPLETE new paragraph text
+   - Include clause numbers if the original has them (e.g., "3.2 ")
+   - The system will detect minimal changes automatically
+   
+   Example: Insert "reasonable" into clause 3.2
+   - Original: "3.2 Comply with your instructions with skill."
+   - amended_text: "3.2 Comply with your reasonable instructions with skill."
+   
+   The system shows only "your instructions" → "your reasonable instructions" as tracked changes.
 
 2. INSERT - Add a new single paragraph after a target paragraph
    { "type": "INSERT", "insert_after": <paragraph_id>, "content": "<text_to_insert>", "list_level": <optional: 0-9> }
@@ -167,7 +175,9 @@ OPERATION TYPES:
 3. DELETE - Remove a target paragraph
    { "type": "DELETE", "target_id": <paragraph_id> }
 
-NO OTHER OPERATION TYPES ARE PERMITTED. Do not invent new types such as INSERT_BLOCK, AMEND_MULTI, REPLACE_SECTION, or any variation.
+NO OTHER OPERATION TYPES ARE PERMITTED.
+
+
 
 === HANDLING COMPLEX REQUESTS ===
 

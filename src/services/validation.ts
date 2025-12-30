@@ -42,7 +42,10 @@ export interface Operation {
     target_id?: number;
     end_id?: number;
     insert_after?: number;
-    amended_text?: string;
+    // AMEND_SIMPLE fields (new targeted replacement)
+    find_text?: string;       // Exact text to find in paragraph
+    replace_text?: string;    // Replacement text
+    amended_text?: string;    // Legacy: full paragraph replacement (deprecated)
     content?: string;
     block?: string; // Legacy/forbidden support detection
     styleToken?: string;
@@ -185,13 +188,32 @@ export function validateOperations(
                 });
             }
 
-            if (op.type === 'AMEND_SIMPLE' && !op.amended_text) {
-                errors.push({
-                    code: 'MISSING_AMENDED_TEXT',
-                    message: `Operation ${index}: AMEND_SIMPLE requires "amended_text" field`,
-                    operationIndex: index,
-                    field: 'amended_text'
-                });
+            if (op.type === 'AMEND_SIMPLE') {
+                // Prefer find_text/replace_text (new targeted approach)
+                if (op.find_text && !op.replace_text) {
+                    errors.push({
+                        code: 'MISSING_REPLACE_TEXT',
+                        message: `Operation ${index}: find_text provided without replace_text`,
+                        operationIndex: index,
+                        field: 'replace_text'
+                    });
+                }
+                if (op.replace_text && !op.find_text) {
+                    errors.push({
+                        code: 'MISSING_FIND_TEXT',
+                        message: `Operation ${index}: replace_text provided without find_text`,
+                        operationIndex: index,
+                        field: 'find_text'
+                    });
+                }
+                // Fallback: amended_text still allowed for backwards compatibility
+                if (!op.find_text && !op.amended_text) {
+                    errors.push({
+                        code: 'MISSING_AMEND_DATA',
+                        message: `Operation ${index}: AMEND_SIMPLE requires find_text/replace_text`,
+                        operationIndex: index
+                    });
+                }
             }
 
             // DELETE requires target_id
