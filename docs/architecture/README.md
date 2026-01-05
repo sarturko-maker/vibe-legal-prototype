@@ -10,12 +10,12 @@ An ADR captures a significant architectural decision along with its context and 
 
 | ADR | Title | Status |
 |-----|-------|--------|
-| ADR-001 | Serverless BYOK Architecture | Reserved |
-| ADR-002 | OOXML Manipulation Strategy | Reserved |
-| ADR-003 | Track Changes Implementation | Reserved |
-| ADR-004 | Paragraph Identification | Reserved |
-| ADR-005 | Style Preservation | Reserved |
-| ADR-006 | Sides Feature | Reserved |
+| [ADR-001](ADR-001-serverless-byok.md) | Serverless BYOK Architecture | Accepted |
+| [ADR-002](ADR-002-track-changes-strategy.md) | Track Changes Strategy | Accepted |
+| [ADR-003](ADR-003-track-changes-implementation.md) | Track Changes Implementation | Accepted |
+| [ADR-004](ADR-004-paragraph-identification.md) | Paragraph Identification | Accepted |
+| [ADR-005](ADR-005-style-preservation.md) | Style Preservation | Accepted |
+| [ADR-006](ADR-006-sides-feature.md) | Sides Feature | Accepted |
 | [ADR-007](ADR-007-context-feature.md) | Deal Context Feature | Accepted |
 | [ADR-008](ADR-008-definitions-feature.md) | Definitions Feature | Accepted |
 | [ADR-009](ADR-009-negotiate-feature.md) | Negotiate Feature | Accepted |

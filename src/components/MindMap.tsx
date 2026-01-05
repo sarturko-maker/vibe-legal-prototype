@@ -115,7 +115,7 @@ export const MindMap: React.FC<MindMapProps> = ({
     };
 
     const currentTopic = topics.find(t => t.id === viewState.expandedTopicId);
-    const currentSubTopic = currentTopic?.subTopics.find(s => s.id === viewState.selectedSubTopicId);
+    const currentSubTopic = (currentTopic?.subTopics ?? []).find(s => s.id === viewState.selectedSubTopicId);
 
     return (
         <div className="modal">

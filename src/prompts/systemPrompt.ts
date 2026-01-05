@@ -67,16 +67,20 @@ export function buildRouterSystemPrompt(
     styleContext += `\n**CRITICAL: For INSERT operations, include ALL formatting from the style table:**\n`;
     styleContext += `\n**For clause headings (e.g., "7. CONFIDENTIALITY"):**\n`;
     styleContext += `- style: "${headingStyle?.name || 'Heading 3'}"\n`;
-    styleContext += `- font: "${headingStyle?.font?.name || 'Google Sans'}", fontSize: ${headingStyle?.font?.size || 14}\n`;
+    styleContext += `- font: "${headingStyle?.font?.name || 'Arial'}", fontSize: ${headingStyle?.font?.size || 12}\n`;
     styleContext += `- bold: ${headingStyle?.font?.bold ?? true}\n`;
     styleContext += `- color: "${headingStyle?.font?.color || 'auto'}"\n`;
-    styleContext += `\n**For body text (e.g., "7.1 Each party agrees..."):**\n`;
+    styleContext += `\n**For body text / sub-clauses (e.g., "5.5 Non-Infringement..."):**\n`;
     styleContext += `- style: "${bodyStyle?.name || 'Normal'}"\n`;
-    styleContext += `- font: "${bodyStyle?.font?.name || 'sans-serif'}", fontSize: ${bodyStyle?.font?.size || 12}\n`;
-    styleContext += `- bold: false (body text is usually NOT bold)\n`;
+    styleContext += `- font: "${bodyStyle?.font?.name || 'Arial'}", fontSize: ${bodyStyle?.font?.size || 11}\n`;
+    styleContext += `- bold: false\n`;
+    styleContext += `\n**⚠️ WARNING: Body text and sub-clauses use SMALLER font than headings!**\n`;
+    styleContext += `- Headings (e.g., "5. WARRANTIES") = ${headingStyle?.font?.size || 12}pt\n`;
+    styleContext += `- Body/sub-clauses (e.g., "5.5 Non-Infringement...") = ${bodyStyle?.font?.size || 11}pt\n`;
+    styleContext += `- DO NOT use heading fontSize for body text!\n`;
     styleContext += `\n**Example INSERT with full formatting:**\n`;
-    styleContext += `{ "type": "INSERT", "insert_after": 25, "content": "7. CONFIDENTIALITY", "style": "${headingStyle?.name || 'Heading 3'}", "font": "${headingStyle?.font?.name || 'Google Sans'}", "fontSize": ${headingStyle?.font?.size || 14}, "bold": ${headingStyle?.font?.bold ?? true}, "color": "${headingStyle?.font?.color || 'auto'}" }\n`;
-    styleContext += `{ "type": "INSERT", "insert_after": 25, "content": "7.1 Each party agrees...", "style": "${bodyStyle?.name || 'Normal'}", "font": "${bodyStyle?.font?.name || 'sans-serif'}", "fontSize": ${bodyStyle?.font?.size || 12}, "bold": false }\n`;
+    styleContext += `{ "type": "INSERT", "insert_after": 25, "content": "7. CONFIDENTIALITY", "style": "${headingStyle?.name || 'Heading 3'}", "font": "${headingStyle?.font?.name || 'Arial'}", "fontSize": ${headingStyle?.font?.size || 12}, "bold": ${headingStyle?.font?.bold ?? true}, "color": "${headingStyle?.font?.color || 'auto'}" }\n`;
+    styleContext += `{ "type": "INSERT", "insert_after": 25, "content": "7.1 Each party agrees...", "style": "${bodyStyle?.name || 'Normal'}", "font": "${bodyStyle?.font?.name || 'Arial'}", "fontSize": ${bodyStyle?.font?.size || 11}, "bold": false }\n`;
   }
 
   // Enhancement context (deal context, side instruction, chat history)
@@ -136,13 +140,25 @@ For HYBRID intent (user asks AND wants changes):
   "operations": [<operation_objects>]
 }
 
-=== PARAGRAPH TARGETING ===
+=== PARAGRAPH TARGETING (READ CAREFULLY - COMMON MISTAKES!) ===
 
-CRITICAL - PARAGRAPH IDS:
-- The document has PARAGRAPHS numbered 1, 2, 3... (1-indexed)
-- The CONTRACT MAP shows clauses with their PARAGRAPH IDs in brackets: [P25] means paragraph 25
-- When targeting a clause, use the PARAGRAPH ID from the map, NOT the clause number
-- Example: "Clause 6 - Governing Law [P25]" → use target_id: 25, NOT target_id: 6
+⚠️ **WARNING: CLAUSE NUMBER ≠ PARAGRAPH ID** ⚠️
+
+The document has PARAGRAPHS numbered 1, 2, 3... (these are PARAGRAPH IDs).
+Clauses have CLAUSE NUMBERS like 5.4, 6.1, 8.2 (these are NOT paragraph IDs).
+
+**THE CONTRACT MAP FORMAT:**
+Each entry shows: [P##] where ## is the PARAGRAPH ID you must use.
+Example: "[P33] 5.4 Warranty Remedy" means:
+  - Clause number: 5.4
+  - PARAGRAPH ID: 33 (this is what you use in target_id)
+
+**COMMON MISTAKE TO AVOID:**
+If you want to amend clause 5.4, do NOT use target_id: 54 or target_id: 5.
+Look up the [P##] in the CONTRACT MAP → use that number.
+
+**CORRECT:** { "target_id": 33 } for "[P33] 5.4 Warranty Remedy"
+**WRONG:**  { "target_id": 5 } or { "target_id": 54 }
 
 CLAUSE STRUCTURE:
 - Each clause may span MULTIPLE paragraphs
@@ -162,6 +178,32 @@ OPERATION TYPES:
    - amended_text is the COMPLETE new paragraph text
    - Include clause numbers if the original has them (e.g., "3.2 ")
    - The system will detect minimal changes automatically
+   - **AVOID COSMETIC CHANGES** - do NOT rewrite portions that the user didn't ask to change!
+   
+   **MINIMAL CHANGES EXAMPLES:**
+   
+   User asks: "Remove 'sole obligation and Buyer's exclusive remedy' from the warranty clause"
+   Original: "Seller's sole obligation and Buyer's exclusive remedy shall be, at Seller's option, to: (a) repair..."
+   
+   ✓ CORRECT: "Seller shall be, at Seller's option, to: (a) repair..."
+     (Only removes what was asked, keeps "shall be", "option, to:", punctuation, etc.)
+   
+   ✗ WRONG: "Seller shall, at Seller's option: (a) repair..."
+     (Changed "shall be" to "shall" and "option, to:" to "option:" - cosmetic rewording!)
+   
+   ✗ WRONG: "Seller shall, at Seller's option, either: (a) repair..."
+     (Added "either" - unnecessary rewording!)
+   
+   **LIST ITEM DELETION EXAMPLE:**
+   
+   User asks: "Delete item (e) from clause 5.3"
+   Original: "...(c) use inconsistent with instructions; (d) normal wear and tear; or (e) unpaid Products."
+   
+   ✓ CORRECT: "...(c) use inconsistent with instructions; or (d) normal wear and tear."
+     (Just deletes "; or (e)..." and moves "or" before the new last item)
+   
+   ✗ WRONG: "...(c) use inconsistent with Seller's instructions or documentation; or (d) normal wear and tear."
+     (Rewrote item (c) text - unnecessary! Only (e) should be deleted)
    
    Example: Insert "reasonable" into clause 3.2
    - Original: "3.2 Comply with your instructions with skill."
@@ -211,6 +253,51 @@ If adding a single-paragraph clause like Confidentiality:
 - INSERT: "Each party agrees to keep confidential..." (body WITHOUT "7.1")
 
 Do NOT automatically add "7.1" to every body paragraph. Match the document's pattern.
+
+=== RENUMBERING WHEN INSERTING (CRITICAL) ===
+
+**GOLDEN RULE: Clause numbers must ALWAYS be sequential. No gaps, no out-of-order numbers.**
+
+When you INSERT a new clause, you MUST ensure the final sequence is logical:
+
+**SCENARIO 1: Insert at END of a section (PREFERRED)**
+If adding a new sub-clause to section 5 (which has 5.1-5.5), add it as 5.6:
+- INSERT after 5.5: "5.6 New clause content..."
+- No renumbering needed
+
+**SCENARIO 2: Insert in MIDDLE of a section (REQUIRES RENUMBERING)**
+If you need to insert between 5.3 and 5.4:
+1. INSERT after 5.3: "5.4 New clause content..."
+2. AMEND old 5.4: Change "5.4" → "5.5" 
+3. AMEND old 5.5: Change "5.5" → "5.6"
+...and so on for all subsequent clauses in that section
+
+**NEVER do this (creates non-sequential numbering):**
+- Insert "5.6" after 5.4 when 5.5 still exists → Results in 5.4, 5.6, 5.5 (INVALID)
+
+**STRATEGY: Prefer end-of-section insertions to avoid cascade renumbering.**
+
+When asked to add a clause that logically fits in the middle:
+1. First check if it can go at the END of the section instead
+2. If it MUST go in the middle, include AMEND operations to renumber ALL subsequent clauses
+3. If renumbering would affect too many clauses (>5), explain and suggest adding at the end instead
+
+**EXAMPLE - Adding warranty for non-infringement to section 5:**
+
+Current section 5 has: 5.1 (Limited Warranty), 5.2, 5.3, 5.4, 5.5 (DISCLAIMER)
+
+WRONG approach (creates 5.4, 5.6, 5.5):
+[
+  { "type": "INSERT", "insert_after": 33, "content": "5.6 Non-Infringement..." }  // BAD!
+]
+
+CORRECT approach (add at end as 5.6, then update DISCLAIMER references):
+[
+  { "type": "AMEND_SIMPLE", "target_id": 34, "amended_text": "5.6 DISCLAIMER. EXCEPT AS EXPRESSLY SET FORTH IN SECTIONS 5.1 AND 5.5..." },  // Renumber 5.5→5.6, update refs
+  { "type": "INSERT", "insert_after": 33, "content": "5.5 Non-Infringement Warranty. Seller warrants..." }  // Insert as new 5.5
+]
+
+This inserts the new warranty as 5.5 and renumbers DISCLAIMER to 5.6, keeping sequence valid.
 
 === SEQUENTIAL INSERTIONS ===
 
@@ -298,8 +385,24 @@ Example - adding a bullet under warranty clause where P19/P20 are list items at 
 
 CRITICAL: If you omit list_level, the content inserts as a PLAIN paragraph, not a bullet.
 
+=== INLINE TITLE FORMATTING ===
+
+Many legal documents use **inline titles** where the clause number and title are bold, followed by regular text:
+- "**5.1 Limited Warranty.** Seller warrants that the Products will..."
+- "**8.2 Seller's Indemnification.** Seller shall indemnify..."
+
+**WHEN INSERTING SUB-CLAUSES, use this pattern:**
+- Wrap the clause number + title + period in **double asterisks**
+- The body text follows WITHOUT asterisks
+
+**CORRECT:**
+{ "type": "INSERT", "insert_after": 33, "content": "**5.5 Non-Infringement Warranty.** Seller warrants that the Products do not infringe any third party intellectual property rights." }
+
+**WRONG (no inline title bolding):**
+{ "type": "INSERT", "insert_after": 33, "content": "5.5 Non-Infringement Warranty. Seller warrants that..." }
+
 FORMATTING:
-Use markdown in amended_text: **bold** for defined terms, *italic* for emphasis.
+Use markdown **bold** for inline titles and defined terms, *italic* for emphasis.
 
 RULES:
 - ALWAYS use paragraph IDs (1-indexed), find them in the CONTRACT MAP [PN] notation

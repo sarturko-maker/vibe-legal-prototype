@@ -14,6 +14,18 @@ import { ContractMap, ContractMapState, ClauseInfo, ParagraphInfo } from '../../
 export function buildContractMapContext(contractMap: ContractMap | null): string {
     if (!contractMap) return '';
 
+    // Build CLAUSE INDEX first - maps clause numbers to paragraph IDs
+    const clauseIndexLines: string[] = [];
+    for (const c of contractMap.clauses) {
+        if (c.number) {
+            clauseIndexLines.push(`[P${c.paragraphId}] ${c.number} ${c.title}`);
+        }
+    }
+
+    const clauseIndexSection = clauseIndexLines.length > 0
+        ? '=== CLAUSE INDEX (use [P##] as target_id) ===\n' + clauseIndexLines.join('\n')
+        : '';
+
     // Build COMPLETE paragraph map (legacy format)
     // This is the addressing system AI uses to target operations
     const paragraphMapLines: string[] = [];
@@ -28,7 +40,8 @@ export function buildContractMapContext(contractMap: ContractMap | null): string
         } else if (p.isListItem) {
             meta += ` {List: true}`;
         }
-        paragraphMapLines.push(`[${p.id}] ${meta} ${text}`);
+        // Use [P##] format prominently
+        paragraphMapLines.push(`[P${p.id}] ${meta} ${text}`);
     }
 
     const paragraphMapSection = paragraphMapLines.length > 0
@@ -36,12 +49,13 @@ export function buildContractMapContext(contractMap: ContractMap | null): string
         : '';
 
     let result = '\n=== CONTRACT INTELLIGENCE ===\n';
-    result += `Total Paragraphs: ${contractMap.totalParagraphs}\n`;
-    result += '\n' + paragraphMapSection;
-    result += '\n\n=== SEMANTIC GUIDANCE ===\n';
-    result += '- Use [P#] notation to target specific paragraphs\n';
-    result += '- Heading paragraphs have style Heading 2/3, body paragraphs have style List Paragraph\n';
-    result += '- For AMEND operations, target the body paragraph [P#], not the heading\n';
+    result += `Total Paragraphs: ${contractMap.totalParagraphs}\n\n`;
+    result += clauseIndexSection;
+    result += '\n\n' + paragraphMapSection;
+    result += '\n\n=== TARGETING REMINDER ===\n';
+    result += '- The number after [P] is the PARAGRAPH ID (target_id)\n';
+    result += '- Example: [P33] 5.4 Warranty Remedy → use target_id: 33\n';
+    result += '- DO NOT use the clause number (5.4) as target_id!\n';
 
     return result;
 }

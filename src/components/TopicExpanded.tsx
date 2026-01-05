@@ -13,14 +13,18 @@ export const TopicExpanded: React.FC<TopicExpandedProps> = ({
     onAskAITopic,
     onAskAISubTopic
 }) => {
+    // Defensive: ensure arrays exist
+    const subTopics = topic.subTopics ?? [];
+    const keyFigures = topic.keyFigures ?? [];
+
     return (
         <div className="mindmap__expanded">
             <div className="mindmap__expanded-header">
                 <h2 className="mindmap__expanded-title">{topic.title}</h2>
                 <p className="mindmap__expanded-summary">{topic.summary}</p>
-                {topic.keyFigures.length > 0 && (
+                {keyFigures.length > 0 && (
                     <div className="mindmap__figures">
-                        {topic.keyFigures.map((fig, i) => (
+                        {keyFigures.map((fig, i) => (
                             <span key={i} className="mindmap__figure">{fig}</span>
                         ))}
                     </div>
@@ -31,7 +35,7 @@ export const TopicExpanded: React.FC<TopicExpandedProps> = ({
             <div>
                 <p className="mindmap__subtopics-label">Sub-topics</p>
                 <div className="mindmap__subtopics">
-                    {topic.subTopics.map((sub, index) => (
+                    {subTopics.map((sub, index) => (
                         <SubTopicCard
                             key={sub.id}
                             subTopic={sub}

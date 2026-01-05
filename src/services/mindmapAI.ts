@@ -22,7 +22,7 @@ ${selectedSide ? `You are advising: ${selectedSide}\n` : ''}
 
 TOPIC: ${topic.title}
 ${topic.summary}
-${topic.keyFigures.length > 0 ? `Key figures: ${topic.keyFigures.join(', ')}` : ''}
+${topic.keyFigures?.length > 0 ? `Key figures: ${topic.keyFigures.join(', ')}` : ''}
 
 ${subTopic ? `SUB-TOPIC: ${subTopic.name}\n${subTopic.summary}` : ''}
 

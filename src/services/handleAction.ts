@@ -17,6 +17,11 @@ import { validateAIResponse, ValidationResult, formatValidationError } from './v
 import { buildRiskToleranceInstruction } from '../prompts/riskTolerancePrompt';
 import { RiskTolerance } from '../types/state';
 import { findMinimalChanges } from '../utils/textDiff';
+import { toMarkdown } from '../utils/markdownNormalizer';
+import { formatDiffForAI, convertDmpToTextChanges, TextChange } from '../utils/diffFormatter';
+import { executeAmendChange } from './amendExecutor';
+import { validateChangesWithAI } from './aiSelfValidator';
+import { diff_match_patch } from 'diff-match-patch';
 
 
 
@@ -319,11 +324,13 @@ async function buildDocumentContext(): Promise<{
         await context.sync();
 
         // --- STYLE ANALYSIS ---
+        // Track font sizes per style to find MOST COMMON (mode) rather than first occurrence
         const styleMap = new Map<string, {
             count: number;
             exampleIndex: number;
             font: any;
             paragraphFormat: any;
+            fontSizes: Map<number, number>; // fontSize -> count
         }>();
         const styleFormats = new Map<string, Set<string>>();
 
@@ -342,7 +349,7 @@ async function buildDocumentContext(): Promise<{
                     exampleIndex: i + 1,
                     font: {
                         name: p.font.name,
-                        size: p.font.size,
+                        size: p.font.size, // Will be updated to mode later
                         bold: p.font.bold,
                         italic: p.font.italic,
                         underline: p.font.underline !== 'None',
@@ -353,11 +360,32 @@ async function buildDocumentContext(): Promise<{
                         lineSpacing: p.lineSpacing,
                         spaceBefore: p.spaceBefore,
                         spaceAfter: p.spaceAfter
-                    }
+                    },
+                    fontSizes: new Map([[p.font.size, 1]])
                 });
             } else {
-                styleMap.get(styleName)!.count++;
+                const style = styleMap.get(styleName)!;
+                style.count++;
+                // Track font size occurrences
+                const currentCount = style.fontSizes.get(p.font.size) || 0;
+                style.fontSizes.set(p.font.size, currentCount + 1);
             }
+        }
+
+        // Update each style's font.size to the MOST COMMON (mode) font size
+        for (const [name, data] of styleMap) {
+            let maxCount = 0;
+            let modeSize = data.font.size; // Default to first occurrence
+            for (const [size, count] of data.fontSizes) {
+                if (count > maxCount) {
+                    maxCount = count;
+                    modeSize = size;
+                }
+            }
+            if (modeSize !== data.font.size) {
+                console.log(`[Style Detection] "${name}" font size: first=${data.font.size}pt, mode=${modeSize}pt (using mode)`);
+            }
+            data.font.size = modeSize;
         }
 
         const styleMenu: StyleInfo[] = [];
@@ -472,7 +500,9 @@ async function findParagraphByContent(
 export async function executeOperations(
     operations: any[],
     author: string,
-    styleMenu: StyleInfo[] = [] // Default to empty array
+    styleMenu: StyleInfo[] = [], // Default to empty array
+    apiKey?: string,
+    model?: string
 ): Promise<{ successCount: number; errorCount: number }> {
 
     return Word.run(async (context: any) => {
@@ -582,7 +612,7 @@ export async function executeOperations(
                 if (!lookupHasTarget) {
                     console.error('[executeOperations] AMEND TARGET MISSING! Available IDs:', Object.keys(lookup).slice(0, 10).join(', '), '...');
                 }
-                const result = await handleAmendOperation(context, op, lookup, author);
+                const result = await handleAmendOperation(context, op, lookup, author, apiKey, model);
                 if (result.success) {
                     successCount++;
                 } else {
@@ -671,12 +701,14 @@ async function handleAmendOperation(
     context: any,
     op: any,
     lookup: { [id: number]: any },
-    author: string
+    author: string,
+    apiKey?: string,
+    model?: string
 ): Promise<{ success: boolean; error?: string }> {
     try {
         const targetId = op.target_id;
         console.log('[handleAmendOperation] ══════════════════════════════════════');
-        console.log('[handleAmendOperation] Starting AMEND for target_id:', targetId);
+        console.log('[handleAmendOperation] FOUR-LAYER APPROACH for target_id:', targetId);
 
         // Step 1: Lookup paragraph
         console.log('[handleAmendOperation] Step 1: Looking up paragraph...');
@@ -693,39 +725,105 @@ async function handleAmendOperation(
         }
         console.log('[handleAmendOperation] Step 1 DONE: Paragraph found');
 
-        // Step 2: Load paragraph text
-        console.log('[handleAmendOperation] Step 2: Loading paragraph text...');
+        // Step 2: Load and normalize original text
+        console.log('[handleAmendOperation] Step 2: Loading and normalizing text...');
         startPara.load('text');
         await context.sync();
-        const originalText = startPara.text.trim();
-        console.log('[handleAmendOperation] Step 2 DONE: Original text (' + originalText.length + ' chars)');
-        console.log('[handleAmendOperation] Original:', originalText.substring(0, 100));
+        const rawOriginalText = startPara.text.trim();
+        const originalMarkdown = toMarkdown(rawOriginalText);
+        console.log('[handleAmendOperation] Step 2 DONE: Normalized (' + originalMarkdown.length + ' chars)');
+        console.log('[handleAmendOperation] Original:', originalMarkdown.substring(0, 100));
 
-        // Step 3: Get amended text and calculate diff
-        if (!op.amended_text) {
-            console.error('[handleAmendOperation] FAILED: No amended_text provided');
-            return { success: false, error: 'Missing amended_text' };
+        // Step 3: Execute change (Two-Step AI OR legacy amended_text)
+        console.log('[handleAmendOperation] Step 3: Executing change...');
+        let amendedMarkdown: string;
+
+        // Check if we have API credentials and change_description for two-step AI
+        if (apiKey && model && op.change_description) {
+            console.log('[handleAmendOperation] Using two-step AI execution');
+            amendedMarkdown = await executeAmendChange({
+                originalMarkdown,
+                changeDescription: op.change_description,
+                userInstruction: op.user_instruction || op.change_description,
+                apiKey,
+                model
+            });
+            amendedMarkdown = toMarkdown(amendedMarkdown);
+        } else if (op.amended_text) {
+            // Fallback to legacy amended_text
+            console.log('[handleAmendOperation] Using legacy amended_text');
+            amendedMarkdown = toMarkdown(stripFormattingMarkers(op.amended_text).trim());
+        } else {
+            console.error('[handleAmendOperation] FAILED: No change_description or amended_text');
+            return { success: false, error: 'Missing change_description or amended_text' };
         }
 
-        const amendedText = stripFormattingMarkers(op.amended_text).trim();
-        console.log('[handleAmendOperation] Amended:', amendedText.substring(0, 100));
+        console.log('[handleAmendOperation] Step 3 DONE: Amended text ready');
+        console.log('[handleAmendOperation] Amended:', amendedMarkdown.substring(0, 100));
 
-        // Step 4: Use diff to find all minimal changes
-        console.log('[handleAmendOperation] Step 4: Calculating minimal diffs...');
-        const changes = findMinimalChanges(originalText, amendedText);
+        // Step 4: Calculate diff
+        console.log('[handleAmendOperation] Step 4: Calculating diff...');
+        const dmp = new diff_match_patch();
+        let dmpDiffs = dmp.diff_main(originalMarkdown, amendedMarkdown);
+        dmp.diff_cleanupSemantic(dmpDiffs);
+        let textChanges = convertDmpToTextChanges(dmpDiffs);
 
-        if (changes.length === 0) {
+        if (textChanges.every(c => c.type === 'equal')) {
             console.log('[handleAmendOperation] No changes detected (texts are identical)');
             return { success: true };
         }
 
-        console.log('[handleAmendOperation] Step 4 DONE: Found', changes.length, 'changes');
+        console.log('[handleAmendOperation] Step 4 DONE: Diff calculated');
+        console.log('[handleAmendOperation] Diff preview:', formatDiffForAI(textChanges));
+
+        // Step 5: AI Self-Validation (if we have API credentials)
+        if (apiKey && model) {
+            console.log('[handleAmendOperation] Step 5: AI Self-Validation...');
+            const validation = await validateChangesWithAI({
+                originalText: originalMarkdown,
+                userInstruction: op.user_instruction || op.change_description || 'Amend the text',
+                changeDescription: op.change_description || 'Amendment',
+                amendedText: amendedMarkdown,
+                calculatedDiff: textChanges,
+                apiKey,
+                model
+            });
+
+            if (!validation.approved && validation.corrected_text) {
+                console.log('[handleAmendOperation] AI self-correction triggered');
+                console.log('[handleAmendOperation] Feedback:', validation.feedback);
+
+                // Use corrected text and recalculate diff
+                const correctedMarkdown = toMarkdown(validation.corrected_text);
+                dmpDiffs = dmp.diff_main(originalMarkdown, correctedMarkdown);
+                dmp.diff_cleanupSemantic(dmpDiffs);
+                textChanges = convertDmpToTextChanges(dmpDiffs);
+                amendedMarkdown = correctedMarkdown;
+
+                console.log('[handleAmendOperation] Corrected diff:', formatDiffForAI(textChanges));
+            } else {
+                console.log('[handleAmendOperation] ✓ AI approved all changes');
+            }
+        } else {
+            console.log('[handleAmendOperation] Step 5: Skipping AI validation (no API credentials)');
+        }
+
+        // Step 6: Convert to find/replace format for Word
+        console.log('[handleAmendOperation] Step 6: Converting to Word operations...');
+        const changes = findMinimalChanges(originalMarkdown, amendedMarkdown);
+
+        if (changes.length === 0) {
+            console.log('[handleAmendOperation] No changes to apply');
+            return { success: true };
+        }
+
+        console.log('[handleAmendOperation] Step 6 DONE: Found', changes.length, 'changes');
         changes.forEach((c, i) => {
             console.log(`[handleAmendOperation]   [${i}] "${c.find_text}" → "${c.replace_text}"`);
         });
 
-        // Step 5: Load track changes state
-        console.log('[handleAmendOperation] Step 5: Loading track changes state...');
+        // Step 7: Load track changes state
+        console.log('[handleAmendOperation] Step 7: Loading track changes state...');
         context.document.load('changeTrackingMode');
         await context.sync();
         const originalMode = context.document.changeTrackingMode;
@@ -733,27 +831,57 @@ async function handleAmendOperation(
             || originalMode === Word.ChangeTrackingMode.trackMineOnly
             || originalMode === 'TrackAll'
             || originalMode === 'TrackMineOnly';
-        console.log('[handleAmendOperation] Step 5 DONE: Mode =', originalMode);
+        console.log('[handleAmendOperation] Step 7 DONE: Mode =', originalMode);
 
-        // Step 6: Enable track changes
-        console.log('[handleAmendOperation] Step 6: Enabling track changes...');
+        // Step 8: Enable track changes
+        console.log('[handleAmendOperation] Step 8: Enabling track changes...');
         if (!wasAlreadyTracking) {
             context.document.changeTrackingMode = Word.ChangeTrackingMode.trackAll;
             await context.sync();
             console.log('[handleAmendOperation] Track changes ENABLED');
         }
 
-        // Step 7: Apply changes in REVERSE order (end to start) so positions don't shift
-        console.log('[handleAmendOperation] Step 7: Applying', changes.length, 'changes in reverse order...');
+        // Step 9: Apply changes in REVERSE order (end to start) so positions don't shift
+        console.log('[handleAmendOperation] Step 9: Applying', changes.length, 'changes in reverse order...');
         let successfulChanges = 0;
         let failedChanges = 0;
 
         for (let i = changes.length - 1; i >= 0; i--) {
             const change = changes[i];
+
+            // Check if this is a pure insertion (has insert_after field)
+            if (change.insert_after && change.insert_text) {
+                console.log(`[handleAmendOperation] Applying pure insertion after "${change.insert_after}": "${change.insert_text}"`);
+
+                // Find the anchor text
+                let searchResults = startPara.search(change.insert_after, { matchCase: true });
+                searchResults.load('items');
+                await context.sync();
+
+                if (searchResults.items.length === 0) {
+                    searchResults = startPara.search(change.insert_after, { matchCase: false });
+                    searchResults.load('items');
+                    await context.sync();
+                }
+
+                if (searchResults.items.length === 0) {
+                    console.warn(`[handleAmendOperation] Skipping insertion: anchor "${change.insert_after}" not found`);
+                    failedChanges++;
+                    continue;
+                }
+
+                // Insert at the END of the anchor range (not replacing it)
+                searchResults.items[0].insertText(change.insert_text, Word.InsertLocation.end);
+                await context.sync();
+                successfulChanges++;
+                console.log(`[handleAmendOperation] Pure insertion applied successfully`);
+                continue;
+            }
+
             console.log(`[handleAmendOperation] Applying change ${changes.length - i}/${changes.length}: "${change.find_text}"`);
 
             // Validate find_text exists
-            if (!originalText.includes(change.find_text)) {
+            if (!originalMarkdown.includes(change.find_text)) {
                 console.warn(`[handleAmendOperation] Skipping change ${i}: find_text not found in original`);
                 failedChanges++;
                 continue;
@@ -784,8 +912,8 @@ async function handleAmendOperation(
             console.log(`[handleAmendOperation] Change ${changes.length - i} applied successfully`);
         }
 
-        // Step 8: Restore state
-        console.log('[handleAmendOperation] Step 8: Restoring track changes state...');
+        // Step 10: Restore state
+        console.log('[handleAmendOperation] Step 10: Restoring track changes state...');
         if (!wasAlreadyTracking) {
             context.document.changeTrackingMode = Word.ChangeTrackingMode.off;
             await context.sync();
@@ -995,11 +1123,38 @@ async function handleInsertOperation(
         }
 
         // Apply explicit font properties
+        // SMART FONT SIZE: Override AI's fontSize if it doesn't match document body style
+        const bodyStyle = documentStyles.find(s => s.usedForBody);
+        const headingStyle = documentStyles.find(s => s.usedForHeadings);
+        const isHeadingContent = /^\d+\.\s+[A-Z]{2,}/.test(cleanContent); // e.g., "7. CONFIDENTIALITY"
+
+        // DEBUG: Trace style detection
+        console.log('[INSERT STYLE DEBUG] documentStyles count:', documentStyles.length);
+        console.log('[INSERT STYLE DEBUG] bodyStyle found:', !!bodyStyle, bodyStyle?.name, bodyStyle?.font?.size);
+        console.log('[INSERT STYLE DEBUG] headingStyle found:', !!headingStyle, headingStyle?.name);
+        console.log('[INSERT STYLE DEBUG] isHeadingContent:', isHeadingContent);
+        console.log('[INSERT STYLE DEBUG] op.fontSize:', op.fontSize);
+
+        let effectiveFontSize = op.fontSize;
+        if (bodyStyle?.font?.size && !isHeadingContent) {
+            // For body/sub-clause text, use the detected body font size
+            if (op.fontSize && op.fontSize !== bodyStyle.font.size) {
+                console.log(`[handleInsertOperation] Overriding AI fontSize ${op.fontSize} → ${bodyStyle.font.size} (body style)`);
+                effectiveFontSize = bodyStyle.font.size;
+            }
+        } else if (headingStyle?.font?.size && isHeadingContent) {
+            // For heading text, use detected heading font size
+            if (op.fontSize && op.fontSize !== headingStyle.font.size) {
+                console.log(`[handleInsertOperation] Overriding AI fontSize ${op.fontSize} → ${headingStyle.font.size} (heading style)`);
+                effectiveFontSize = headingStyle.font.size;
+            }
+        }
+
         if (op.font) {
             newPara.font.name = op.font;
         }
-        if (op.fontSize) {
-            newPara.font.size = op.fontSize;
+        if (effectiveFontSize) {
+            newPara.font.size = effectiveFontSize;
         }
         if (op.bold !== undefined) {
             newPara.font.bold = op.bold;
@@ -1033,14 +1188,60 @@ async function handleInsertOperation(
         console.log('[INSERT DEBUG] Mode verified:', context.document.changeTrackingMode);
 
         // Insert Text into the styled empty paragraph
+        // Parse markdown **bold** markers and apply formatting
         console.log('[INSERT DEBUG] Inserting content into empty para...');
-        // We use insertText on the paragraph itself (defaults to replace/append depending on usage, 
-        // strictly speaking 'Replace' on an empty para content range is safe)
-        const range = newPara.getRange('Content');
-        // Note: insertText on range returns a new range
-        range.insertText(cleanContent, 'Replace');
 
+        // Parse markdown bold markers: **text** -> bold
+        const boldPattern = /\*\*(.+?)\*\*/g;
+        const boldRanges: { start: number; end: number; text: string }[] = [];
+        let plainContent = cleanContent;
+        let offset = 0;
+
+        // Find all bold markers and calculate positions in plain text
+        let match;
+        while ((match = boldPattern.exec(cleanContent)) !== null) {
+            const markerStart = match.index - offset;
+            const boldText = match[1];
+            boldRanges.push({
+                start: markerStart,
+                end: markerStart + boldText.length,
+                text: boldText
+            });
+            offset += 4; // Account for removed ** markers (2 at start, 2 at end)
+        }
+
+        // Remove markdown markers from content
+        plainContent = cleanContent.replace(/\*\*(.+?)\*\*/g, '$1');
+
+        console.log('[INSERT DEBUG] Bold ranges found:', boldRanges.length);
+        if (boldRanges.length > 0) {
+            console.log('[INSERT DEBUG] Bold sections:', boldRanges.map(r => `"${r.text}"`).join(', '));
+        }
+
+        // Insert plain text first
+        const range = newPara.getRange('Content');
+        range.insertText(plainContent, 'Replace');
         await context.sync();
+
+        // Apply bold formatting to marked ranges
+        if (boldRanges.length > 0) {
+            for (const boldRange of boldRanges) {
+                try {
+                    // Search for the bold text within the paragraph
+                    const searchResults = newPara.search(boldRange.text, { matchCase: true });
+                    searchResults.load('items');
+                    await context.sync();
+
+                    if (searchResults.items.length > 0) {
+                        searchResults.items[0].font.bold = true;
+                        await context.sync();
+                        console.log('[INSERT DEBUG] Applied bold to:', boldRange.text);
+                    }
+                } catch (boldError: any) {
+                    console.warn('[INSERT DEBUG] Could not apply bold to:', boldRange.text, boldError?.message);
+                }
+            }
+        }
 
         // ═══════════════════════════════════════════════════════════
         // STEP 5: Restore original state

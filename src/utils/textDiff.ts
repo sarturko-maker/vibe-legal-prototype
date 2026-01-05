@@ -11,6 +11,9 @@ import { diff_match_patch } from 'diff-match-patch';
 export interface MinimalChange {
     find_text: string;
     replace_text: string;
+    // For pure insertions: instead of find/replace, we insert_text after insert_after
+    insert_after?: string;
+    insert_text?: string;
 }
 
 /**
@@ -28,8 +31,8 @@ function normalizeSpacing(text: string): string {
         .replace(/ !/g, '!')
         .replace(/ \)/g, ')')
         .replace(/\( /g, '(')
-        // Fix split words like "A ll" -> "All" (single letter + space + lowercase)
-        .replace(/\b([A-Za-z]) ([a-z]+)\b/g, '$1$2')
+        // NOTE: Removed the "split word" fixer (.replace(/\b([A-Za-z]) ([a-z]+)\b/g, '$1$2'))
+        // It was too aggressive and would join legitimate separate words like "A when" → "Awhen"
         // Collapse multiple spaces
         .replace(/  +/g, ' ')
         .trim();
@@ -86,39 +89,96 @@ export function findMinimalChanges(original: string, amended: string): MinimalCh
                 i++;
             }
 
-            // Get Context
-            // We need 1 word before and 1 word after to anchor the find/replace
+            // Get Context - use 1 word before and after for anchoring
+            // IMPORTANT: Extract EXACT text from original, don't reconstruct from split words
+            // (splitting on whitespace breaks possessives like "Seller's" → "Seller 's")
 
-            // Context Before
-            // Look back safely from current position
-            const lookbackSize = 30; // Scan back 30 chars to find a word boundary
-            const contextBeforeStub = normOriginal.substring(Math.max(0, position - lookbackSize), position);
-            const wordsBefore = contextBeforeStub.trim().split(/\s+/);
-            const contextBefore = wordsBefore.length > 0 ? wordsBefore[wordsBefore.length - 1] : '';
+            // Context Before - find last word before the change
+            const lookbackSize = 30;
+            const beforeStart = Math.max(0, position - lookbackSize);
+            const contextBeforeStub = normOriginal.substring(beforeStart, position);
+            // Find the last complete word
+            const lastSpaceBefore = contextBeforeStub.lastIndexOf(' ');
+            const contextBefore = lastSpaceBefore >= 0
+                ? contextBeforeStub.substring(lastSpaceBefore + 1)
+                : contextBeforeStub;
 
-            // Context After
-            // Look forward after the deleted segment
+            // Context After - find first word after the change
             const lookforwardSize = 30;
             const contextAfterStub = normOriginal.substring(position + deleted.length, position + deleted.length + lookforwardSize);
-            const wordsAfter = contextAfterStub.trim().split(/\s+/);
-            const contextAfter = wordsAfter.length > 0 ? wordsAfter[0] : '';
+            // Find the first complete word
+            const firstSpaceAfter = contextAfterStub.indexOf(' ');
+            const contextAfter = firstSpaceAfter >= 0
+                ? contextAfterStub.substring(0, firstSpaceAfter)
+                : contextAfterStub;
+
+            // SPECIAL CASE: Pure insertion (nothing deleted, just inserting new text)
+            // Use insert_after/insert_text to avoid showing context as deleted
+            if (deleted.length === 0 && inserted.length > 0 && contextBefore) {
+                // For pure insertion, find the anchor text and insert after it
+                // Anchor should include nearby punctuation for uniqueness
+                let anchor = contextBefore;
+                // If there's punctuation immediately after the insertion point, include it
+                const charAfter = normOriginal.charAt(position);
+                if (charAfter && /[;:,.\)]/.test(charAfter)) {
+                    anchor += charAfter;
+                }
+
+                changes.push({
+                    find_text: anchor,
+                    replace_text: anchor + inserted.trimStart(), // Insert text after anchor
+                    insert_after: anchor,
+                    insert_text: inserted.trimStart()
+                });
+
+                position += deleted.length;
+                continue; // Skip the normal processing
+            }
 
             // Build find/replace strings with context
-            // Add space around context if it acts as a separate word
+            // CRITICAL: Check if we need a space between context and content
+            // Don't add space before apostrophe/punctuation or if text naturally joins
             let find_text = deleted;
             let replace_text = inserted;
 
+
             if (contextBefore) {
-                find_text = contextBefore + ' ' + find_text;
-                replace_text = contextBefore + ' ' + replace_text;
+                // Check if deleted starts with punctuation (like apostrophe) - no space needed
+                const needsSpaceBeforeDeleted = deleted.length > 0 && /^[a-zA-Z0-9]/.test(deleted.charAt(0));
+                const needsSpaceBeforeInserted = inserted.length > 0 && /^[a-zA-Z0-9]/.test(inserted.charAt(0));
+
+                if (needsSpaceBeforeDeleted) {
+                    find_text = contextBefore + ' ' + find_text;
+                } else {
+                    find_text = contextBefore + find_text;
+                }
+
+                if (needsSpaceBeforeInserted) {
+                    replace_text = contextBefore + ' ' + replace_text;
+                } else {
+                    replace_text = contextBefore + replace_text;
+                }
             }
 
             if (contextAfter) {
-                find_text = find_text + ' ' + contextAfter;
-                replace_text = replace_text + ' ' + contextAfter;
+                // Check if content ends with punctuation - no space needed after
+                const findEndsWithPunct = find_text.length > 0 && /[^a-zA-Z0-9]$/.test(find_text);
+                const replaceEndsWithPunct = replace_text.length > 0 && /[^a-zA-Z0-9]$/.test(replace_text);
+
+                if (findEndsWithPunct || /^[^a-zA-Z0-9]/.test(contextAfter)) {
+                    find_text = find_text + contextAfter;
+                } else {
+                    find_text = find_text + ' ' + contextAfter;
+                }
+
+                if (replaceEndsWithPunct || /^[^a-zA-Z0-9]/.test(contextAfter)) {
+                    replace_text = replace_text + contextAfter;
+                } else {
+                    replace_text = replace_text + ' ' + contextAfter;
+                }
             }
 
-            // Cleanup whitespace
+            // Cleanup whitespace - normalize multiple spaces and trim
             find_text = find_text.replace(/\s+/g, ' ').trim();
             replace_text = replace_text.replace(/\s+/g, ' ').trim();
 
@@ -150,7 +210,118 @@ export function findMinimalChanges(original: string, amended: string): MinimalCh
         return { find_text: find, replace_text: replace };
     });
 
-    return normalizedChanges;
+    // ==========================================================================
+    // PASS 1: Filter BOUNDARY OVERLAPS where one change ends with text another begins with
+    // Instead of merging (which caused corruption), we SKIP the shorter overlapping change
+    // Example: "...remedy shall" and "shall be," both reference the same "shall"
+    // We keep the longer one which contains more context
+    // ==========================================================================
+    const filteredChanges: MinimalChange[] = [];
+    const skippedIndices = new Set<number>();
+
+    for (let i = 0; i < normalizedChanges.length; i++) {
+        if (skippedIndices.has(i)) continue;
+
+        const current = normalizedChanges[i];
+        let shouldSkip = false;
+
+        // Check if this change overlaps with any other change
+        for (let j = 0; j < normalizedChanges.length; j++) {
+            if (j === i || skippedIndices.has(j)) continue;
+            const other = normalizedChanges[j];
+
+            // Check if current's find_text ends with text that other's find_text starts with
+            // or vice versa
+            let overlapLen = 0;
+            const maxOverlap = Math.min(current.find_text.length, other.find_text.length);
+
+            for (let len = 3; len <= maxOverlap; len++) {
+                if (current.find_text.slice(-len) === other.find_text.slice(0, len)) {
+                    overlapLen = len;
+                }
+                if (other.find_text.slice(-len) === current.find_text.slice(0, len)) {
+                    overlapLen = len;
+                }
+            }
+
+            // If significant overlap found, skip the shorter change
+            if (overlapLen >= 3) {
+                const overlap = current.find_text.slice(-overlapLen);
+                console.log(`[textDiff] Boundary overlap found: "${overlap}" (${overlapLen} chars)`);
+
+                if (current.find_text.length < other.find_text.length) {
+                    console.log(`[textDiff] Skipping shorter change: "${current.find_text.slice(0, 40)}..."`);
+                    shouldSkip = true;
+                    break;
+                } else {
+                    console.log(`[textDiff] Skipping other change: "${other.find_text.slice(0, 40)}..."`);
+                    skippedIndices.add(j);
+                }
+            }
+        }
+
+        if (!shouldSkip) {
+            filteredChanges.push(current);
+        }
+        skippedIndices.add(i);
+    }
+
+    if (filteredChanges.length !== normalizedChanges.length) {
+        console.log(`[textDiff] After overlap filter: ${normalizedChanges.length} → ${filteredChanges.length} changes`);
+    }
+
+    // ==========================================================================
+    // PASS 2: Handle CONTAINED overlaps where one find string contains another
+    // CONSERVATIVE APPROACH: Only merge when inner's find_text appears in BOTH
+    // the outer's find_text AND replace_text (true substring edit case)
+    // ==========================================================================
+    const mergedChanges: MinimalChange[] = [];
+    const usedIndices = new Set<number>();
+
+    for (let i = 0; i < filteredChanges.length; i++) {
+        if (usedIndices.has(i)) continue;
+
+        let change = { ...filteredChanges[i] };
+        let wasMerged = false;
+
+        // Check if any other change's find_text is a substring of this one
+        for (let j = 0; j < filteredChanges.length; j++) {
+            if (j === i || usedIndices.has(j)) continue;
+            const inner = filteredChanges[j];
+
+            // Only merge if:
+            // 1. Inner's find_text is inside outer's find_text
+            // 2. Inner's find_text is ALSO in outer's replace_text (meaning we can apply the replacement)
+            // 3. They're different changes
+            const innerInFind = change.find_text.includes(inner.find_text);
+            const innerInReplace = change.replace_text.includes(inner.find_text);
+
+            if (innerInFind && innerInReplace && change.find_text !== inner.find_text) {
+                // Safe to merge - apply inner's replacement to outer's replacement
+                change.replace_text = change.replace_text.replace(inner.find_text, inner.replace_text);
+                usedIndices.add(j);
+                wasMerged = true;
+                console.log(`[textDiff] Merged contained: "${inner.find_text}" → "${inner.replace_text}" into "${change.find_text}"`);
+            } else if (innerInFind && !innerInReplace && change.find_text !== inner.find_text) {
+                // Inner's find_text is in outer's find but NOT in replace - this is NOT a merge case
+                // These are INDEPENDENT changes that happen to overlap, skip the inner one
+                console.log(`[textDiff] Skipping overlap (not mergeable): "${inner.find_text}" not in replace text`);
+            }
+        }
+
+        if (wasMerged) {
+            console.log(`[textDiff] Result: "${change.find_text}" → "${change.replace_text}"`);
+        }
+
+        mergedChanges.push(change);
+        usedIndices.add(i);
+    }
+
+    if (mergedChanges.length !== filteredChanges.length) {
+        console.log(`[textDiff] After contained merge: ${filteredChanges.length} → ${mergedChanges.length} changes`);
+    }
+
+    return mergedChanges;
 }
 
 /**
