@@ -7,6 +7,7 @@
  */
 
 import { diff_match_patch } from 'diff-match-patch';
+import { TextChange } from '../types/operations';
 
 export interface MinimalChange {
     find_text: string;
@@ -14,6 +15,81 @@ export interface MinimalChange {
     // For pure insertions: instead of find/replace, we insert_text after insert_after
     insert_after?: string;
     insert_text?: string;
+}
+
+/**
+ * Extract last N characters from text, preferring word boundaries.
+ * Used to create multi-word anchors for insertions/deletions.
+ */
+function extractAnchor(text: string, charCount: number): string {
+    if (!text || text.length === 0) {
+        return '';
+    }
+
+    // Take last N chars
+    let anchor = text.slice(-charCount).trim();
+
+    // If we cut mid-word, try to find a word boundary
+    if (anchor.length > 0 && text.length > charCount) {
+        const firstSpace = anchor.indexOf(' ');
+        if (firstSpace > 0 && firstSpace < anchor.length - 1) {
+            // Cut off the partial word at the start
+            anchor = anchor.substring(firstSpace + 1);
+        }
+    }
+
+    return anchor;
+}
+
+/**
+ * Expand replacement context to make find/replace strings unique.
+ * Uses direct substring extraction to preserve exact spacing.
+ * 
+ * @param beforeContext - Text that comes BEFORE the change (EQUAL segment)
+ * @param afterContext - Text that comes AFTER the change (EQUAL segment)
+ * @param findText - Original text being replaced
+ * @param replaceText - New text to replace with
+ * @returns Expanded find/replace with symmetric context
+ */
+function expandReplacementContext(
+    beforeContext: string,
+    afterContext: string,
+    findText: string,
+    replaceText: string
+): { find: string; replace: string } {
+    // Use character-based extraction to preserve exact spacing
+    const contextChars = 25;
+
+    // Extract last N chars from before context (preserve spaces!)
+    let leftContext = '';
+    if (beforeContext.length > 0) {
+        leftContext = beforeContext.slice(-contextChars);
+        // Try to start at a word boundary (find first space and cut there)
+        const spaceIdx = leftContext.indexOf(' ');
+        if (spaceIdx > 0 && spaceIdx < leftContext.length - 1) {
+            leftContext = leftContext.substring(spaceIdx); // Keep the space!
+        }
+    }
+
+    // Extract first N chars from after context (preserve spaces!)
+    let rightContext = '';
+    if (afterContext.length > 0) {
+        rightContext = afterContext.slice(0, contextChars);
+        // Try to end at a word boundary (find last space and cut there)
+        const lastSpaceIdx = rightContext.lastIndexOf(' ');
+        if (lastSpaceIdx > 0) {
+            rightContext = rightContext.substring(0, lastSpaceIdx); // Cut at space
+        }
+    }
+
+    // Build expanded strings - DON'T TRIM, preserve spacing!
+    const expandedFind = leftContext + findText + rightContext;
+    const expandedReplace = leftContext + replaceText + rightContext;
+
+    console.log(`[textDiff] Expanded replacement: "${findText}" → "${replaceText}"`);
+    console.log(`[textDiff]   With context: "${expandedFind}" → "${expandedReplace}"`);
+
+    return { find: expandedFind, replace: expandedReplace };
 }
 
 /**
@@ -39,6 +115,219 @@ function normalizeSpacing(text: string): string {
 }
 
 /**
+ * Trims common prefixes and suffixes from DELETE+INSERT pairs.
+ * This makes track changes show only actual differences.
+ * 
+ * Example: DELETE "documentation;" + INSERT "documentation;or"
+ * Becomes: EQUAL "documentation;" + INSERT "or"
+ */
+function cleanupDiffEdges(diffs: Array<[number, string]>): Array<[number, string]> {
+    const cleaned: Array<[number, string]> = [];
+
+    for (let i = 0; i < diffs.length; i++) {
+        const [op, text] = diffs[i];
+
+        // Look for DELETE (-1) + INSERT (1) pairs (replacements)
+        if (op === -1 && i + 1 < diffs.length && diffs[i + 1][0] === 1) {
+            const oldText = text;
+            const newText = diffs[i + 1][1];
+
+            // Find common prefix
+            let prefixLen = 0;
+            const minLen = Math.min(oldText.length, newText.length);
+            while (prefixLen < minLen && oldText[prefixLen] === newText[prefixLen]) {
+                prefixLen++;
+            }
+
+            // Find common suffix (after accounting for prefix)
+            let suffixLen = 0;
+            const remainingOld = oldText.length - prefixLen;
+            const remainingNew = newText.length - prefixLen;
+            const minRemaining = Math.min(remainingOld, remainingNew);
+
+            while (suffixLen < minRemaining &&
+                oldText[oldText.length - 1 - suffixLen] === newText[newText.length - 1 - suffixLen]) {
+                suffixLen++;
+            }
+
+            // Extract parts
+            const commonPrefix = oldText.substring(0, prefixLen);
+            const commonSuffix = suffixLen > 0 ? oldText.substring(oldText.length - suffixLen) : '';
+
+            const oldCore = oldText.substring(prefixLen, oldText.length - suffixLen);
+            const newCore = newText.substring(prefixLen, newText.length - suffixLen);
+
+            // Add cleaned operations
+            if (commonPrefix.length > 0) {
+                cleaned.push([0, commonPrefix]); // EQUAL
+            }
+
+            if (oldCore.length > 0) {
+                cleaned.push([-1, oldCore]); // DELETE
+            }
+
+            if (newCore.length > 0) {
+                cleaned.push([1, newCore]); // INSERT
+            }
+
+            if (commonSuffix.length > 0) {
+                cleaned.push([0, commonSuffix]); // EQUAL
+            }
+
+            i++; // Skip next since we processed the INSERT
+            continue;
+        }
+
+        // Keep all other diffs unchanged
+        cleaned.push([op, text]);
+    }
+
+    return cleaned;
+}
+
+/**
+ * Convert diffs to TextChange array.
+ * Uses insert_after for pure insertions, delete_after for pure deletions,
+ * and replace for replacements. This produces cleaner track changes.
+ */
+function convertDiffsToTextChanges(diffs: Array<[number, string]>): TextChange[] {
+    const changes: TextChange[] = [];
+
+    for (let i = 0; i < diffs.length; i++) {
+        const [op, text] = diffs[i];
+
+        if (op === 0) {
+            continue; // Skip unchanged text
+        }
+
+        if (op === 1) {
+            // INSERT - check if this is part of a replacement or pure insertion
+            const prevDiff = i > 0 ? diffs[i - 1] : null;
+            const prevPrevDiff = i > 1 ? diffs[i - 2] : null;
+            const prevIsDelete = prevPrevDiff && prevPrevDiff[0] === -1;
+
+            // If previous operation was DELETE (before any EQUAL), this is part of a replacement
+            // The DELETE handler already processed it, so skip
+            if (prevIsDelete && prevDiff && prevDiff[0] === 0) {
+                // This insert follows EQUAL after DELETE - it's a standalone pure insertion
+            } else if (prevPrevDiff && prevPrevDiff[0] === -1) {
+                // Skip - already handled by delete
+                continue;
+            }
+
+            // PURE INSERTION - use insert_after
+            const beforeText = prevDiff && prevDiff[0] === 0 ? prevDiff[1] : '';
+            const anchor = extractAnchor(beforeText, 40);
+
+            if (!anchor) {
+                console.warn('[textDiff] Pure insertion with no anchor context - using fallback');
+                // Fallback: look for text after insertion
+                const nextDiff = i + 1 < diffs.length ? diffs[i + 1] : null;
+                const afterContext = nextDiff && nextDiff[0] === 0 ? nextDiff[1].slice(0, 20) : '';
+
+                if (afterContext) {
+                    changes.push({
+                        type: 'replace',
+                        find: afterContext,
+                        replace: text + afterContext
+                    });
+                } else {
+                    console.error('[textDiff] Pure insertion with no context at all');
+                }
+            } else {
+                changes.push({
+                    type: 'insert_after',
+                    anchor: anchor,
+                    text: text
+                });
+            }
+            continue;
+        }
+
+        if (op === -1) {
+            // DELETE - check if this is part of a replacement
+            const nextDiff = i + 1 < diffs.length ? diffs[i + 1] : null;
+
+            if (nextDiff && nextDiff[0] === 1) {
+                // REPLACEMENT - DELETE followed by INSERT
+                // Expand context to make find/replace unique in paragraph
+                const prevDiff = i > 0 ? diffs[i - 1] : null;
+                const afterInsertDiff = i + 2 < diffs.length ? diffs[i + 2] : null;
+
+                const beforeContext = prevDiff && prevDiff[0] === 0 ? prevDiff[1] : '';
+                const afterContext = afterInsertDiff && afterInsertDiff[0] === 0 ? afterInsertDiff[1] : '';
+
+                const { find, replace } = expandReplacementContext(
+                    beforeContext,
+                    afterContext,
+                    text,           // Original (being deleted)
+                    nextDiff[1]     // New (being inserted)
+                );
+
+                changes.push({
+                    type: 'replace',
+                    find: find,
+                    replace: replace
+                });
+                i++; // Skip next since we processed it
+                continue;
+            } else {
+                // PURE DELETION - use delete_after
+                const prevDiff = i > 0 ? diffs[i - 1] : null;
+                const beforeText = prevDiff && prevDiff[0] === 0 ? prevDiff[1] : '';
+                // Use longer anchor (50 chars) to push further back from any nearby insertions
+                const anchor = extractAnchor(beforeText, 50);
+
+                if (!anchor) {
+                    console.warn('[textDiff] Pure deletion with no anchor context - using fallback');
+                    // Fallback: use replace with empty string
+                    changes.push({
+                        type: 'replace',
+                        find: text,
+                        replace: ''
+                    });
+                } else {
+                    changes.push({
+                        type: 'delete_after',
+                        anchor: anchor,
+                        textToDelete: text
+                    });
+                }
+            }
+        }
+    }
+
+    return changes;
+}
+
+/**
+ * Convert TextChange array to MinimalChange array for backward compatibility.
+ */
+function textChangesToMinimalChanges(changes: TextChange[]): MinimalChange[] {
+    return changes.map(change => {
+        if (change.type === 'replace') {
+            return {
+                find_text: change.find,
+                replace_text: change.replace
+            };
+        } else if (change.type === 'insert_after') {
+            return {
+                find_text: change.anchor,
+                replace_text: change.anchor + change.text,
+                insert_after: change.anchor,
+                insert_text: change.text
+            };
+        } else {
+            // delete_after
+            return {
+                find_text: change.anchor + change.textToDelete,
+                replace_text: change.anchor
+            };
+        }
+    });
+}
+
+/**
  * Find ALL minimal changes between original and amended text.
  * Uses Google's diff-match-patch to find semantic changes.
  */
@@ -56,10 +345,14 @@ export function findMinimalChanges(original: string, amended: string): MinimalCh
     const dmp = new diff_match_patch();
 
     // Get character-level diff
-    const diffs = dmp.diff_main(normOriginal, normAmended);
+    let diffs = dmp.diff_main(normOriginal, normAmended);
 
     // Semantic cleanup handles "Buyer." vs "Buyer ." grouping naturally
     dmp.diff_cleanupSemantic(diffs);
+
+    // NEW: Clean up edges - trim common prefix/suffix from DELETE+INSERT pairs
+    // This ensures track changes show only actual differences
+    diffs = cleanupDiffEdges(diffs);
 
     const changes: MinimalChange[] = [];
     let position = 0; // Cursor in original text
@@ -331,3 +624,40 @@ export function findMinimalChange(original: string, amended: string): MinimalCha
     const changes = findMinimalChanges(original, amended);
     return changes.length > 0 ? changes[0] : null;
 }
+
+/**
+ * Find text changes with proper insert_after/delete_after/replace types.
+ * Returns TextChange array for cleaner track changes.
+ */
+export function findTextChanges(original: string, amended: string): TextChange[] {
+    const normOriginal = original.trim().replace(/\s+/g, ' ');
+    const normAmended = amended.trim().replace(/\s+/g, ' ');
+
+    if (normOriginal === normAmended) {
+        console.log('[textDiff] Texts are identical');
+        return [];
+    }
+
+    const dmp = new diff_match_patch();
+    let diffs = dmp.diff_main(normOriginal, normAmended);
+    dmp.diff_cleanupSemantic(diffs);
+    diffs = cleanupDiffEdges(diffs);
+
+    const changes = convertDiffsToTextChanges(diffs);
+
+    console.log(`[textDiff] Found ${changes.length} text changes`);
+    changes.forEach((change, idx) => {
+        if (change.type === 'replace') {
+            console.log(`[textDiff]   [${idx}] Replace: "${change.find.substring(0, 30)}..." → "${change.replace.substring(0, 30)}..."`);
+        } else if (change.type === 'insert_after') {
+            console.log(`[textDiff]   [${idx}] Insert "${change.text}" after anchor "${change.anchor}"`);
+        } else if (change.type === 'delete_after') {
+            console.log(`[textDiff]   [${idx}] Delete "${change.textToDelete.substring(0, 30)}..." after anchor "${change.anchor}"`);
+        }
+    });
+
+    return changes;
+}
+
+// Re-export TextChange type for convenience
+export type { TextChange } from '../types/operations';

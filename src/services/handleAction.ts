@@ -16,9 +16,9 @@ import { stripFormattingMarkers } from './formatting/markdownParser';
 import { validateAIResponse, ValidationResult, formatValidationError } from './validation';
 import { buildRiskToleranceInstruction } from '../prompts/riskTolerancePrompt';
 import { RiskTolerance } from '../types/state';
-import { findMinimalChanges } from '../utils/textDiff';
+import { findMinimalChanges, findTextChanges, TextChange } from '../utils/textDiff';
 import { toMarkdown } from '../utils/markdownNormalizer';
-import { formatDiffForAI, convertDmpToTextChanges, TextChange } from '../utils/diffFormatter';
+import { formatDiffForAI, convertDmpToTextChanges, TextChange as DiffTextChange } from '../utils/diffFormatter';
 import { executeAmendChange } from './amendExecutor';
 import { validateChangesWithAI } from './aiSelfValidator';
 import { diff_match_patch } from 'diff-match-patch';
@@ -692,6 +692,104 @@ export async function executeOperations(
 }
 
 /**
+ * Apply TextChange array to a paragraph with proper native handling.
+ * - insert_after: Uses native Word insertion at end of anchor range
+ * - delete_after: Searches for anchor+textToDelete, replaces with just anchor
+ * - replace: Standard search/replace
+ */
+async function applyTextChanges(
+    context: any,
+    paragraph: any,
+    changes: TextChange[]
+): Promise<{ successCount: number; failedCount: number }> {
+    let successCount = 0;
+    let failedCount = 0;
+
+    // Apply in reverse order for stability (changes don't affect earlier positions)
+    for (let i = changes.length - 1; i >= 0; i--) {
+        const change = changes[i];
+        console.log(`[applyTextChanges] Applying change ${i + 1}/${changes.length}`);
+
+        try {
+            if (change.type === 'insert_after') {
+                // NATIVE INSERTION
+                console.log(`[applyTextChanges] → Insert "${change.text}" after anchor "${change.anchor}"`);
+
+                let searchResults = paragraph.search(change.anchor, { matchCase: false });
+                searchResults.load('items');
+                await context.sync();
+
+                if (searchResults.items.length === 0) {
+                    console.warn(`[applyTextChanges] Anchor not found: "${change.anchor}"`);
+                    failedCount++;
+                    continue;
+                }
+
+                // Get end of anchor range and insert text there
+                const anchorRange = searchResults.items[0];
+                anchorRange.insertText(change.text, Word.InsertLocation.end);
+                await context.sync();
+
+                console.log(`[applyTextChanges] ✓ Insert applied successfully`);
+                successCount++;
+
+            } else if (change.type === 'delete_after') {
+                // NATIVE DELETION - search for ONLY the text to delete (not anchor + text)
+                // Anchor stays untouched = won't show in track changes
+                console.log(`[applyTextChanges] → Delete "${change.textToDelete.substring(0, 30)}..."`);
+
+                // Search for the text to delete directly
+                let searchResults = paragraph.search(change.textToDelete, { matchCase: false });
+                searchResults.load('items');
+                await context.sync();
+
+                if (searchResults.items.length === 0) {
+                    console.warn(`[applyTextChanges] Text to delete not found: "${change.textToDelete.substring(0, 50)}"`);
+                    failedCount++;
+                    continue;
+                }
+
+                if (searchResults.items.length > 1) {
+                    console.warn(`[applyTextChanges] Multiple matches (${searchResults.items.length}), using first`);
+                }
+
+                // Delete it (replace with empty string to respect track changes)
+                searchResults.items[0].insertText('', Word.InsertLocation.replace);
+                await context.sync();
+
+                console.log(`[applyTextChanges] ✓ Delete applied successfully`);
+                successCount++;
+
+            } else if (change.type === 'replace') {
+                // STANDARD SEARCH/REPLACE
+                console.log(`[applyTextChanges] → Replace: "${change.find.substring(0, 30)}..." → "${change.replace.substring(0, 30)}..."`);
+
+                let searchResults = paragraph.search(change.find, { matchCase: false });
+                searchResults.load('items');
+                await context.sync();
+
+                if (searchResults.items.length === 0) {
+                    console.warn(`[applyTextChanges] Find text not found: "${change.find.substring(0, 50)}"`);
+                    failedCount++;
+                    continue;
+                }
+
+                searchResults.items[0].insertText(change.replace, Word.InsertLocation.replace);
+                await context.sync();
+
+                console.log(`[applyTextChanges] ✓ Replace applied successfully`);
+                successCount++;
+            }
+        } catch (error: any) {
+            console.error(`[applyTextChanges] Error applying change ${i}:`, error?.message || error);
+            failedCount++;
+        }
+    }
+
+    return { successCount, failedCount };
+}
+
+/**
  * Handle AMEND operation - Deterministic Diff for Word-Level Track Changes
  * 
  * Uses diff algorithm to find minimal change between original and amended text.
@@ -725,14 +823,32 @@ async function handleAmendOperation(
         }
         console.log('[handleAmendOperation] Step 1 DONE: Paragraph found');
 
-        // Step 2: Load and normalize original text
-        console.log('[handleAmendOperation] Step 2: Loading and normalizing text...');
-        startPara.load('text');
-        await context.sync();
-        const rawOriginalText = startPara.text.trim();
+        // Step 2: Load paragraph text with track changes applied (virtually)
+        // Always use getReviewedText - works whether or not track changes exist
+        // Word API cannot detect track changes created in same session, so don't check
+        console.log('[handleAmendOperation] Step 2: Loading paragraph text...');
+
+        const paragraphRange = startPara.getRange(Word.RangeLocation.whole);
+        let rawOriginalText: string;
+
+        try {
+            // Get "reviewed" text - returns current state with any track changes applied
+            const reviewedText = paragraphRange.getReviewedText(Word.ChangeTrackingVersion.current);
+            await context.sync();
+            rawOriginalText = (reviewedText.value || '').trim();
+            console.log('[handleAmendOperation] Step 2: Got text via getReviewedText');
+        } catch (reviewError: any) {
+            console.warn('[handleAmendOperation] getReviewedText failed, falling back to .text:', reviewError?.message);
+            // Fallback to normal text load (may not include track changes)
+            startPara.load('text');
+            await context.sync();
+            rawOriginalText = startPara.text.trim();
+        }
+
+        console.log(`[handleAmendOperation] Step 2 DONE: Text loaded (${rawOriginalText.length} chars)`);
+        console.log('[handleAmendOperation] Text preview:', rawOriginalText.substring(0, 100));
+
         const originalMarkdown = toMarkdown(rawOriginalText);
-        console.log('[handleAmendOperation] Step 2 DONE: Normalized (' + originalMarkdown.length + ' chars)');
-        console.log('[handleAmendOperation] Original:', originalMarkdown.substring(0, 100));
 
         // Step 3: Execute change (Two-Step AI OR legacy amended_text)
         console.log('[handleAmendOperation] Step 3: Executing change...');
@@ -808,18 +924,24 @@ async function handleAmendOperation(
             console.log('[handleAmendOperation] Step 5: Skipping AI validation (no API credentials)');
         }
 
-        // Step 6: Convert to find/replace format for Word
+        // Step 6: Convert to TextChange format for Word (with proper insert_after/delete_after)
         console.log('[handleAmendOperation] Step 6: Converting to Word operations...');
-        const changes = findMinimalChanges(originalMarkdown, amendedMarkdown);
+        const textChangeList = findTextChanges(originalMarkdown, amendedMarkdown);
 
-        if (changes.length === 0) {
+        if (textChangeList.length === 0) {
             console.log('[handleAmendOperation] No changes to apply');
             return { success: true };
         }
 
-        console.log('[handleAmendOperation] Step 6 DONE: Found', changes.length, 'changes');
-        changes.forEach((c, i) => {
-            console.log(`[handleAmendOperation]   [${i}] "${c.find_text}" → "${c.replace_text}"`);
+        console.log('[handleAmendOperation] Step 6 DONE: Found', textChangeList.length, 'changes');
+        textChangeList.forEach((c, i) => {
+            if (c.type === 'replace') {
+                console.log(`[handleAmendOperation]   [${i}] REPLACE: "${c.find.substring(0, 40)}..." → "${c.replace.substring(0, 40)}..."`);
+            } else if (c.type === 'insert_after') {
+                console.log(`[handleAmendOperation]   [${i}] INSERT_AFTER: anchor="${c.anchor.substring(0, 40)}" text="${c.text}"`);
+            } else if (c.type === 'delete_after') {
+                console.log(`[handleAmendOperation]   [${i}] DELETE_AFTER: anchor="${c.anchor.substring(0, 40)}" delete="${c.textToDelete.substring(0, 30)}..."`);
+            }
         });
 
         // Step 7: Load track changes state
@@ -841,76 +963,9 @@ async function handleAmendOperation(
             console.log('[handleAmendOperation] Track changes ENABLED');
         }
 
-        // Step 9: Apply changes in REVERSE order (end to start) so positions don't shift
-        console.log('[handleAmendOperation] Step 9: Applying', changes.length, 'changes in reverse order...');
-        let successfulChanges = 0;
-        let failedChanges = 0;
-
-        for (let i = changes.length - 1; i >= 0; i--) {
-            const change = changes[i];
-
-            // Check if this is a pure insertion (has insert_after field)
-            if (change.insert_after && change.insert_text) {
-                console.log(`[handleAmendOperation] Applying pure insertion after "${change.insert_after}": "${change.insert_text}"`);
-
-                // Find the anchor text
-                let searchResults = startPara.search(change.insert_after, { matchCase: true });
-                searchResults.load('items');
-                await context.sync();
-
-                if (searchResults.items.length === 0) {
-                    searchResults = startPara.search(change.insert_after, { matchCase: false });
-                    searchResults.load('items');
-                    await context.sync();
-                }
-
-                if (searchResults.items.length === 0) {
-                    console.warn(`[handleAmendOperation] Skipping insertion: anchor "${change.insert_after}" not found`);
-                    failedChanges++;
-                    continue;
-                }
-
-                // Insert at the END of the anchor range (not replacing it)
-                searchResults.items[0].insertText(change.insert_text, Word.InsertLocation.end);
-                await context.sync();
-                successfulChanges++;
-                console.log(`[handleAmendOperation] Pure insertion applied successfully`);
-                continue;
-            }
-
-            console.log(`[handleAmendOperation] Applying change ${changes.length - i}/${changes.length}: "${change.find_text}"`);
-
-            // Validate find_text exists
-            if (!originalMarkdown.includes(change.find_text)) {
-                console.warn(`[handleAmendOperation] Skipping change ${i}: find_text not found in original`);
-                failedChanges++;
-                continue;
-            }
-
-            // Search for text
-            let searchResults = startPara.search(change.find_text, { matchCase: true });
-            searchResults.load('items');
-            await context.sync();
-
-            if (searchResults.items.length === 0) {
-                // Try case-insensitive
-                searchResults = startPara.search(change.find_text, { matchCase: false });
-                searchResults.load('items');
-                await context.sync();
-            }
-
-            if (searchResults.items.length === 0) {
-                console.warn(`[handleAmendOperation] Skipping change ${i}: Word search found no results`);
-                failedChanges++;
-                continue;
-            }
-
-            // Replace first match
-            searchResults.items[0].insertText(change.replace_text, Word.InsertLocation.replace);
-            await context.sync();
-            successfulChanges++;
-            console.log(`[handleAmendOperation] Change ${changes.length - i} applied successfully`);
-        }
+        // Step 9: Apply changes using new TextChange handler
+        console.log('[handleAmendOperation] Step 9: Applying', textChangeList.length, 'changes...');
+        const { successCount, failedCount } = await applyTextChanges(context, startPara, textChangeList);
 
         // Step 10: Restore state
         console.log('[handleAmendOperation] Step 10: Restoring track changes state...');
@@ -920,10 +975,10 @@ async function handleAmendOperation(
         }
 
         console.log('[handleAmendOperation] ══════════════════════════════════════');
-        console.log(`[handleAmendOperation] SUCCESS - ${successfulChanges}/${changes.length} changes applied`);
+        console.log(`[handleAmendOperation] SUCCESS - ${successCount}/${textChangeList.length} changes applied`);
 
-        if (failedChanges > 0) {
-            console.warn(`[handleAmendOperation] ${failedChanges} changes could not be applied`);
+        if (failedCount > 0) {
+            console.warn(`[handleAmendOperation] ${failedCount} changes could not be applied`);
         }
 
         return { success: true };

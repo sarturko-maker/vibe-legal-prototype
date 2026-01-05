@@ -109,3 +109,52 @@ describe('Diff Formatting', () => {
         ]);
     });
 });
+
+describe('Diff Edge Cleanup', () => {
+    // Import findMinimalChanges for integration testing
+    const { findMinimalChanges } = require('../textDiff');
+
+    it('should produce clean insertion when text is added after punctuation', () => {
+        // Original: "instructions or documentation; (d) normal wear"
+        // Amended:  "instructions or documentation; or (d) normal wear"
+        // Expected: Only " or" shows as inserted
+        const original = 'instructions or documentation; (d) normal wear';
+        const amended = 'instructions or documentation; or (d) normal wear';
+
+        const changes = findMinimalChanges(original, amended);
+
+        // Should have exactly one change that adds " or"
+        expect(changes.length).toBe(1);
+        // The change should NOT delete "documentation;" - it should only add " or"
+        expect(changes[0].find_text).not.toContain('documentation;');
+    });
+
+    it('should produce clean deletion when suffix is removed', () => {
+        // Original: "tear; or (e) Products."
+        // Amended:  "tear."
+        // Expected: Only "; or (e) Products" is deleted, "tear" and "." unchanged
+        const original = 'normal wear and tear; or (e) Products.';
+        const amended = 'normal wear and tear.';
+
+        const changes = findMinimalChanges(original, amended);
+
+        // Should have exactly one change
+        expect(changes.length).toBe(1);
+        // The replacement should contain "tear" in both find and replace to preserve it
+        // But the actual deletion is just "; or (e) Products"
+    });
+
+    it('should handle common prefix trimming', () => {
+        // Original: "documentation;"
+        // Amended:  "documentation;or"
+        // Expected: Just "or" inserted after "documentation;"
+        const original = 'documentation;';
+        const amended = 'documentation;or';
+
+        const changes = findMinimalChanges(original, amended);
+
+        // Should show pure insertion, not replacement
+        expect(changes.length).toBe(1);
+        expect(changes[0].replace_text).toContain('or');
+    });
+});

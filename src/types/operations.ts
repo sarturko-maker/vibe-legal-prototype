@@ -88,3 +88,21 @@ export interface ExecutionResult {
     error?: string;
     description?: string;
 }
+
+// Text change types for diff application
+export type TextChange =
+    | {
+        type: 'replace';
+        find: string;
+        replace: string;
+    }
+    | {
+        type: 'insert_after';
+        anchor: string;        // Multi-word phrase to search for
+        text: string;          // Text to insert after anchor
+    }
+    | {
+        type: 'delete_after';
+        anchor: string;        // Multi-word phrase to search for
+        textToDelete: string;  // Text to delete after anchor
+    };
