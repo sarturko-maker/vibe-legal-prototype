@@ -6,11 +6,16 @@
 import { DebateMessage } from '../types/negotiate';
 import { DealContextState } from '../prompts/systemPrompt';
 import { DetectedParties } from './documentAnalysis';
+import { RiskTolerance } from '../types/state';
+import { SideState } from '../components/SideSelector';
 
 export interface NegotiateContext {
     position: string;
     dealContext?: DealContextState | null;
     detectedParties?: DetectedParties | null;
+    riskTolerance?: RiskTolerance | null;
+    userSide: 'for' | 'against';
+    selectedSide?: SideState;
 }
 
 function buildNegotiatePrompt(
@@ -19,47 +24,97 @@ function buildNegotiatePrompt(
     nextSide: 'for' | 'against'
 ): string {
 
-    let prompt = `You are a skilled commercial lawyer in a contract negotiation.
+    // Determine identity
+    const pA = ctx.detectedParties?.partyA;
+    const pB = ctx.detectedParties?.partyB;
 
-=== NEGOTIATION POINT ===
+    // User's identity (from global side selector)
+    const userIsPartyA = ctx.selectedSide?.selected === 'partyA';
+    const userName = userIsPartyA ? pA?.shortName : pB?.shortName;
+    const userRole = userIsPartyA ? 'Party A (Buyer/Client)' : 'Party B (Seller/Provider)';
+    const userDesc = userIsPartyA ? pA?.role : pB?.role;
+
+    // Opponent's identity
+    const oppName = userIsPartyA ? pB?.shortName : pA?.shortName;
+    const oppRole = userIsPartyA ? 'Party B (Seller/Provider)' : 'Party A (Buyer/Client)';
+    const oppDesc = userIsPartyA ? pB?.role : pA?.role;
+
+    // Are we arguing FOR the user (User's Side)?
+    const isArguingForUser = nextSide === ctx.userSide;
+
+    // Current Speaker identity
+    const speakerName = isArguingForUser ? (userName || 'Client') : (oppName || 'Counterparty');
+    const speakerRoleLabel = isArguingForUser ? (userDesc || userRole) : (oppDesc || oppRole);
+
+    let prompt = `You are a skilled commercial lawyer representing ${speakerName} (${speakerRoleLabel}).
+You are debating a contract negotiation point.
+
+=== PROPOSAL BY ${userName || 'User'} ===
 "${ctx.position}"
 `;
 
-    // Add deal context if available
-    if (ctx.dealContext?.description?.trim()) {
+    if (isArguingForUser) {
+        // === USER'S SIDE (Full Context) ===
         prompt += `
-=== DEAL CONTEXT ===
-${ctx.dealContext.description}
+=== YOUR CONTEXT (PRIVILEGED) ===
+You are representing the USER (${speakerRoleLabel}). You have access to the deal background and client preferences.
+
+`;
+        if (ctx.dealContext?.description?.trim()) {
+            prompt += `DEAL BACKGROUND:\n${ctx.dealContext.description}\n\n`;
+        }
+
+        if (ctx.detectedParties) {
+            prompt += `PARTIES:\nParty A: ${pA?.shortName} (${pA?.role})\nParty B: ${pB?.shortName} (${pB?.role})\n\n`;
+        }
+
+        if (ctx.riskTolerance?.enabled) {
+            prompt += `CLIENT PREFERENCES:
+Best Outcome: ${ctx.riskTolerance.bestPosition || 'Maximum protection'}
+Fallback: ${ctx.riskTolerance.fallbackPosition || 'Market-standard'}
+Risk Tolerance: ${ctx.riskTolerance.level}%
+`;
+        }
+
+        prompt += `
+INSTRUCTIONS:
+- Argue IN FAVOR of the negotiation point (or justify why it's reasonable).
+- Use your privileged context to explain WHY this matters to your client.
+- Be persuasive but commercially reasonable.
+`;
+
+    } else {
+        // === ADVERSARY SIDE (Market Practice Only) ===
+        prompt += `
+=== YOUR CONTEXT (OPPOSING COUNSEL) ===
+You are representing the COUNTERPARTY (${speakerRoleLabel}). 
+You DO NOT know the other side's private context. You operate based on MARKET PRACTICE and protecting your client's interests.
+
+INSTRUCTIONS:
+- PUSH BACK against the negotiation point.
+- Argue that it is NOT market practice or is unreasonable.
+- Protect your client (${speakerRoleLabel}) from risk.
+- Do NOT concede easily.
 `;
     }
 
-    // Add party names if available
-    if (ctx.detectedParties) {
-        prompt += `
-=== PARTIES ===
-Party A: ${ctx.detectedParties.partyA.shortName} (${ctx.detectedParties.partyA.role})
-Party B: ${ctx.detectedParties.partyB.shortName} (${ctx.detectedParties.partyB.role})
-`;
-    }
-
-    // Add debate history
+    // Add history
     if (history.length > 0) {
         prompt += `
 === DEBATE SO FAR ===
-${history.map(m => `${m.side.toUpperCase()}: "${m.headline}" - ${m.explanation}`).join('\n\n')}
+${history.map(m => {
+            // Map side to Party Name
+            const isUserSide = m.side === ctx.userSide;
+            const name = isUserSide ? (userName || 'side ' + m.side) : (oppName || 'side ' + m.side);
+            return `${name?.toUpperCase() || 'SIDE ' + m.side.toUpperCase()}: "${m.headline}" - ${m.explanation}`;
+        }).join('\n\n')}
 `;
     }
 
     prompt += `
 === YOUR TASK ===
-Generate the next argument ${nextSide === 'for' ? 'IN FAVOUR OF' : 'AGAINST'} the negotiation point.
-
-${history.length > 0 ? 'Your argument must DIRECTLY RESPOND to the previous argument.' : 'Start with a strong opening argument.'}
-
-Be:
-- Persuasive and specific
-- Realistic (what a real lawyer would say)
-- Concise but substantive
+Generate the next argument for ${speakerName}.
+${history.length > 0 ? 'Respond directly to the previous argument.' : 'Open the debate with a strong justification.'}
 
 Respond with JSON ONLY (no markdown):
 {
@@ -117,9 +172,12 @@ export async function runAutoDebate(
 ): Promise<void> {
 
     const history: DebateMessage[] = [];
-    let currentSide: 'for' | 'against' = 'for';
+    let currentSide: 'for' | 'against' = ctx.userSide; // ALWAYS start with User's side
 
-    for (let round = 0; round < maxRounds * 2; round++) {
+    // Limit to 2 rounds (4 turns total)
+    const effectiveMaxRounds = 2;
+
+    for (let round = 0; round < effectiveMaxRounds * 2; round++) {
         // Check if we should stop
         if (shouldStop()) {
             console.log('[runAutoDebate] Stopped by user');

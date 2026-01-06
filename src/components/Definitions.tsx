@@ -19,6 +19,7 @@ interface DefinitionsProps {
 
 export const Definitions: React.FC<DefinitionsProps> = ({ isOpen, onClose, terms }) => {
     const [search, setSearch] = useState('');
+    const [expandedTerm, setExpandedTerm] = useState<string | null>(null);
     const popoverRef = useRef<HTMLDivElement>(null);
     const searchRef = useRef<HTMLInputElement>(null);
 
@@ -26,6 +27,7 @@ export const Definitions: React.FC<DefinitionsProps> = ({ isOpen, onClose, terms
     useEffect(() => {
         if (isOpen) {
             setSearch('');
+            setExpandedTerm(null);
             setTimeout(() => searchRef.current?.focus(), 100);
         }
     }, [isOpen]);
@@ -59,6 +61,15 @@ export const Definitions: React.FC<DefinitionsProps> = ({ isOpen, onClose, terms
         grouped[letter].push(t);
     });
 
+    const handleToggleExpand = (term: string) => {
+        setExpandedTerm(prev => prev === term ? null : term);
+    };
+
+    // Check if a definition is long enough to need expansion (more than ~100 chars or has ...)
+    const needsExpansion = (definition: string) => {
+        return definition.length > 80 || definition.endsWith('...');
+    };
+
     return (
         <div className="panel-overlay">
             <div className="panel-overlay__backdrop" onClick={onClose} />
@@ -87,12 +98,34 @@ export const Definitions: React.FC<DefinitionsProps> = ({ isOpen, onClose, terms
                         <div key={letter} className="definitions__group">
                             <p className="definitions__letter">{letter}</p>
                             <div className="definitions__list">
-                                {grouped[letter].map((term, i) => (
-                                    <div key={i} className="definitions__item">
-                                        <p className="definitions__term">"{term.term}"</p>
-                                        <p className="definitions__text">{term.definition}</p>
-                                    </div>
-                                ))}
+                                {grouped[letter].map((term, i) => {
+                                    const isExpanded = expandedTerm === term.term;
+                                    const canExpand = needsExpansion(term.definition);
+
+                                    return (
+                                        <div
+                                            key={i}
+                                            className={`definitions__item ${canExpand ? 'definitions__item--expandable' : ''}`}
+                                            onClick={() => canExpand && handleToggleExpand(term.term)}
+                                        >
+                                            <p className="definitions__term">"{term.term}"</p>
+                                            <p className={`definitions__text ${isExpanded ? 'definitions__text--expanded' : ''}`}>
+                                                {term.definition}
+                                            </p>
+                                            {canExpand && (
+                                                <button
+                                                    className="definitions__expand-btn"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        handleToggleExpand(term.term);
+                                                    }}
+                                                >
+                                                    {isExpanded ? 'Show less' : 'Show more'}
+                                                </button>
+                                            )}
+                                        </div>
+                                    );
+                                })}
                             </div>
                         </div>
                     ))}
@@ -111,3 +144,4 @@ export const Definitions: React.FC<DefinitionsProps> = ({ isOpen, onClose, terms
 };
 
 export default Definitions;
+

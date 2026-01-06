@@ -1,7 +1,7 @@
 # ADR-002: Track Changes Strategy
 
 **Status:** Accepted  
-**Date:** 2025-12-27  
+**Date:** 2025-12-27 (Updated: 2026-01-05)  
 **Authors:** Artur (Vibe Legal)  
 **Supersedes:** Earlier OOXML-only approach
 
@@ -32,7 +32,7 @@ We started by manipulating the document's internal structure directly. A Word do
 - `<w:del>` tags — wrapping deleted text  
 - `<w:delText>` — the actual deleted content
 
-This seemed like the "proper" way — it's how commercial legal tech tools work.
+This approach offers complete control over the document structure and doesn't require Word to be running.
 
 **What we built:**
 
@@ -75,7 +75,7 @@ We now use native track changes for all operations in the Word add-in:
 
 | Operation | How It Works |
 |-----------|--------------|
-| **AMEND** | Turn on tracking → find/replace text in paragraph → turn off tracking |
+| **AMEND** | Turn on tracking → use DELETE_AFTER and INSERT_AFTER operations with unique text anchors → turn off tracking |
 | **INSERT** | Turn on tracking → insert new paragraph → turn off tracking |
 | **DELETE** | Turn on tracking → delete paragraph → turn off tracking |
 
@@ -84,6 +84,37 @@ Word automatically:
 - Marks inserted text as additions
 - Preserves the author name and timestamp
 - Handles all the complex numbering and formatting
+
+### The Key Innovation: Anchor-Based Surgery
+
+The native track changes approach works because we use **unique text anchors** to surgically target specific text within paragraphs.
+
+**How it works:**
+1. Diff the original paragraph against the amended version
+2. Identify minimal changes needed (what to delete, what to insert)
+3. Find unique text anchors for each change location
+4. Apply DELETE_AFTER and INSERT_AFTER operations using those anchors
+5. Word automatically shows the changes as track changes
+
+**Example:**
+```
+Original: "The Buyer shall pay within thirty (30) days"
+Amended:  "The Buyer shall pay within sixty (60) days"
+
+Operations created:
+- DELETE_AFTER: anchor="pay within" delete="thirty (30)"
+- INSERT_AFTER: anchor="pay within" text="sixty (60)"
+```
+
+This surgical approach means only the changed words appear as redlines — not the entire paragraph.
+
+**Anchor requirements:**
+- Must be unique (appear exactly once in the paragraph)
+- Must be at least 3 characters long
+- Expanded from 5 to 50 words to achieve uniqueness
+- If no unique anchor found, operation is skipped
+
+See ADR-003 for detailed implementation.
 
 ---
 
@@ -111,6 +142,7 @@ The automation product processes documents without Word open (e.g., review 50 ND
 | File | Purpose |
 |------|---------|
 | `src/services/handleAction.ts` | INSERT, DELETE, AMEND operations using native tracking |
+| `src/utils/textDiff.ts` | Diffing algorithm and anchor-based operation creation |
 
 ### OOXML Engine (For Automation Product)
 
@@ -131,11 +163,15 @@ The automation product processes documents without Word open (e.g., review 50 ND
 - **More reliable** — Word handles its own complexity
 - **Better formatting preservation** — Word knows how to maintain its own structure
 - **Faster development** — new features don't require OOXML expertise
+- **Surgical precision** — anchor-based approach changes only the specific words that differ, making review easy
+- **Deterministic** — same input always produces same output (unlike AI-generated find/replace)
 
 ### Remaining Challenges
 
 - **Numbered lists** — Still tricky even with native approach. Word sometimes renumbers unexpectedly when inserting between list items.
-- **State preservation** — Must detect user's original tracking state and restore it after operations
+- **State preservation** — Must detect user's original tracking state and restore it after operations.
+- **Anchor uniqueness** — Some changes cannot be applied if no unique anchor can be found. Very small changes (1-2 characters) may be skipped to prevent corruption.
+- **Sequential operations** — Multiple operations on the same paragraph can affect each other if they introduce duplicate text that later operations try to use as anchors.
 
 ### OOXML Work Not Wasted
 
@@ -154,6 +190,8 @@ The OOXML manipulation code becomes the foundation for the automation product:
 | OOXML only | Too complex for vibe coding; endless edge cases |
 | Native only (no automation product) | Leaves batch processing use case unserved |
 | Third-party library | None found that handle legal document complexity well |
+| AI-generated find/replace instructions | Non-deterministic; AI might hallucinate different text than actually appears in document |
+| Full paragraph replacement | Shows entire paragraph as changed; poor UX for lawyers reviewing changes |
 
 ---
 
@@ -180,17 +218,44 @@ if (!wasAlreadyTracking) {
 }
 ```
 
+### Finding Change Locations
+
+Word's search function requires unique text to locate where changes should be applied. We use text anchors:
+
+```typescript
+// Find a unique piece of text before the change
+const anchor = findUniqueAnchor(paragraphText, changePosition);
+
+// Verify it appears exactly once
+if (countOccurrences(paragraphText, anchor) !== 1) {
+  console.warn('Skipping operation - anchor not unique');
+  return;
+}
+
+// Apply the change
+const range = paragraph.search(anchor, { matchCase: true });
+range.load('text');
+await context.sync();
+
+// Insert after the anchor
+range.insertText(newText, Word.InsertLocation.after);
+```
+
+This ensures we change the right "thirty days" if the phrase appears multiple times in the document.
+
 ### Verification Points for Code Review
 
 1. `handleAction.ts` — Confirm all operations use native tracking pattern
 2. No direct OOXML insertion in the add-in flow
 3. State preservation: tracking mode restored after operations
 4. Legacy OOXML code clearly marked and separated
+5. `textDiff.ts` — Confirm anchor uniqueness is tested before applying operations
+6. `textDiff.ts` — Confirm operations are skipped (not forced) when anchors aren't unique
 
 ---
 
 ## Related
 
 - ADR-001: Serverless BYOK Architecture (why processing happens client-side)
-- ADR-003: Paragraph Identification (how we target the right paragraphs)
+- ADR-003: Track Changes Implementation (detailed anchor-based implementation)
 - ADR-011: Edge Case Handling (documents remaining challenges)

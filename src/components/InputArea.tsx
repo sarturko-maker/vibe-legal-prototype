@@ -4,13 +4,15 @@
  * Simple UI: checkbox controls whether changes are previewed first
  */
 
-import React, { useState, KeyboardEvent } from 'react';
+import React, { useState, useEffect, KeyboardEvent } from 'react';
 import { useChat } from '../state/ChatContext';
+import { useChatHistory } from '../state/ChatHistoryContext';
 import { useSettings } from '../state/SettingsContext';
 import { handleAction } from '../services/handleAction';
 import { SideState, DetectedParties } from './SideSelector';
 import { DealContextState } from '../prompts/systemPrompt';
 import { RiskTolerance } from '../types/state';
+import { getTitleFromFirstMessage } from '../services/chatTitleGeneration';
 import './InputArea.css';
 
 // Store last message for re-execution on Accept
@@ -37,7 +39,30 @@ export function InputArea({ selectedSide, detectedParties, dealContext, riskTole
         setPendingOperations,
         setPreviewOriginalTexts
     } = useChat();
+    const {
+        addMessageToCurrentChat,
+        updateCurrentChatTitle,
+        currentChat
+    } = useChatHistory();
     const { getCurrentApiKey, getCurrentModel, getAuthorName } = useSettings();
+
+    // Auto-generate title when chat reaches 3 messages
+    useEffect(() => {
+        if (currentChat &&
+            currentChat.title === 'New Chat' &&
+            currentChat.messages.length >= 3) {
+            const title = getTitleFromFirstMessage(currentChat.messages);
+            if (title && title !== 'New Chat') {
+                updateCurrentChatTitle(title);
+            }
+        }
+    }, [currentChat?.messages.length, currentChat?.title]);
+
+    // Helper to add message to both contexts
+    const addMessageToBoth = (msg: { role: 'user' | 'bot'; content: string }) => {
+        addMessage(msg);
+        addMessageToCurrentChat(msg);
+    };
 
     const hasApiKey = !!getCurrentApiKey();
 
@@ -47,7 +72,7 @@ export function InputArea({ selectedSide, detectedParties, dealContext, riskTole
 
         const apiKey = getCurrentApiKey();
         if (!apiKey) {
-            addMessage({ role: 'bot', content: '⚠️ Please add your API key in Settings.' });
+            addMessageToBoth({ role: 'bot', content: '⚠️ Please add your API key in Settings.' });
             return;
         }
 
@@ -55,7 +80,7 @@ export function InputArea({ selectedSide, detectedParties, dealContext, riskTole
         lastMessage = message;
 
         setInput('');
-        addMessage({ role: 'user', content: message });
+        addMessageToBoth({ role: 'user', content: message });
         setIsProcessing(true);
 
         try {
@@ -101,13 +126,13 @@ export function InputArea({ selectedSide, detectedParties, dealContext, riskTole
                 });
             } else if (result.success) {
                 // IMMEDIATE MODE: Changes already applied with track changes
-                addMessage({ role: 'bot', content: result.answer || 'Done.' });
+                addMessageToBoth({ role: 'bot', content: result.answer || 'Done.' });
             } else {
-                addMessage({ role: 'bot', content: `❌ ${result.error}` });
+                addMessageToBoth({ role: 'bot', content: `❌ ${result.error}` });
             }
 
         } catch (error: any) {
-            addMessage({ role: 'bot', content: `❌ Error: ${error.message}` });
+            addMessageToBoth({ role: 'bot', content: `❌ Error: ${error.message}` });
         } finally {
             setIsProcessing(false);
             setProcessingStage('');

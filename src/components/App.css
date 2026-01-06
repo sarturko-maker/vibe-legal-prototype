@@ -23,6 +23,43 @@
     font-weight: 600;
 }
 
+/* Header Icons Section */
+.app-header__icons {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.app-header__icon-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    background: rgba(255, 255, 255, 0.1);
+    border: none;
+    border-radius: 6px;
+    color: rgba(255, 255, 255, 0.8);
+    font-size: 16px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.app-header__icon-btn:hover {
+    background: rgba(255, 255, 255, 0.2);
+    color: white;
+}
+
+.app-header__icon-btn--active {
+    background: rgba(59, 130, 246, 0.4);
+    color: white;
+}
+
+.app-header__icon-btn svg {
+    width: 18px;
+    height: 18px;
+}
+
 .app-mode-badge {
     font-size: 12px;
     padding: 4px 8px;

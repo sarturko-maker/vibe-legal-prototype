@@ -23,6 +23,7 @@ const defaultChatState: ChatState = {
 interface ChatContextType extends ChatState {
     addMessage: (message: Message) => void;
     clearMessages: () => void;
+    setMessages: (messages: Message[]) => void;
     setIsProcessing: (processing: boolean) => void;
     setProcessingStage: (stage: string) => void;
     setAppMode: (mode: AppMode) => void;
@@ -54,6 +55,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         clearMessages: () => setState(s => ({
             ...s,
             messages: []
+        })),
+
+        setMessages: (messages) => setState(s => ({
+            ...s,
+            messages
         })),
 
         setIsProcessing: (isProcessing) => setState(s => ({ ...s, isProcessing })),

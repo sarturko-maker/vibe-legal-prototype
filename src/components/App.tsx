@@ -24,6 +24,9 @@ import { MindMap } from './MindMap';
 import { RiskTolerancePanel } from './RiskTolerancePanel';
 import { NegotiateState, initialNegotiateState } from '../types/negotiate';
 import { RiskTolerance, initialRiskTolerance } from '../types/state';
+import { ChatHistoryProvider, useChatHistory } from '../state/ChatHistoryContext';
+import { ChatHistoryPanel } from './ChatHistoryPanel';
+import { generateChatTitle } from '../services/chatTitleGeneration';
 import './App.css';
 
 declare var Word: any;
@@ -76,6 +79,55 @@ function AppContent() {
     // Risk Tolerance state (ADR-012)
     const [riskTolerance, setRiskTolerance] = useState<RiskTolerance>(initialRiskTolerance);
     const [riskPanelOpen, setRiskPanelOpen] = useState(false);
+
+    // Chat History state
+    const [chatHistoryOpen, setChatHistoryOpen] = useState(false);
+    const {
+        currentChatId,
+        chats,
+        currentChat,
+        startNewChat,
+        switchToChat,
+        deleteChat,
+        updateCurrentChatTitle,
+        clearAllChats
+    } = useChatHistory();
+    const { clearMessages, setMessages } = useChat();
+
+    // Handlers for chat history that sync with ChatContext
+    const handleNewChat = async () => {
+        // Generate AI title for current chat if it has messages and still has default title
+        if (currentChat && currentChat.messages.length > 0 && currentChat.title === 'New Chat') {
+            const apiKey = getCurrentApiKey();
+            if (apiKey) {
+                try {
+                    const title = await generateChatTitle(currentChat.messages, apiKey, getCurrentModel());
+                    updateCurrentChatTitle(title);
+                } catch (error) {
+                    console.error('[handleNewChat] Title generation failed:', error);
+                }
+            }
+        }
+
+        startNewChat();
+        clearMessages();
+        setChatHistoryOpen(false);
+    };
+
+    const handleSwitchChat = (chatId: string) => {
+        const targetChat = chats.find(c => c.id === chatId);
+        if (targetChat) {
+            setMessages(targetChat.messages);
+        }
+        switchToChat(chatId);
+        setChatHistoryOpen(false);
+    };
+
+    const handleClearAllChats = () => {
+        clearMessages();          // Clear displayed messages
+        clearAllChats();          // Clear all history from localStorage
+        setChatHistoryOpen(false); // Close the panel
+    };
 
     const handleRiskToleranceUpdate = (updates: Partial<RiskTolerance>) => {
         setRiskTolerance(prev => ({ ...prev, ...updates }));
@@ -336,32 +388,59 @@ function AppContent() {
     return (
         <div className="app-container">
             <header className="app-header">
-                <h1 className="app-header__title">Vibe Legal</h1>
+                {/* Top row: Title only */}
+                <div className="app-header__top-row">
+                    <h1 className="app-header__title">Vibe Legal</h1>
+                </div>
 
-                <Toolbar
-                    selectedSide={selectedSide}
-                    onSideChange={setSelectedSide}
-                    detectedParties={detectedParties}
-                    partiesLoading={partiesLoading}
-                    sidesSelectorOpen={sidesSelectorOpen}
-                    onSidesSelectorChange={setSidesSelectorOpen}
-                    contextOpen={contextOpen}
-                    setContextOpen={setContextOpen}
-                    dealContext={dealContext}
-                    setDealContext={setDealContext}
-                    contextState={contextState}
-                    definitionsOpen={definitionsOpen}
-                    setDefinitionsOpen={setDefinitionsOpen}
-                    definedTerms={definedTerms}
-                    onNegotiateOpen={openNegotiate}
-                    negotiateHasHistory={negotiateState.messages.length > 0}
-                    mindMapOpen={mindMapOpen}
-                    setMindMapOpen={setMindMapOpen}
-                    mindMapTopicCount={mindMapTopics.length}
-                    riskTolerance={riskTolerance}
-                    riskPanelOpen={riskPanelOpen}
-                    onRiskPanelOpen={() => setRiskPanelOpen(true)}
-                />
+                {/* Toolbar row */}
+                <div className="app-header__toolbar-row">
+                    <Toolbar
+                        selectedSide={selectedSide}
+                        onSideChange={setSelectedSide}
+                        detectedParties={detectedParties}
+                        partiesLoading={partiesLoading}
+                        sidesSelectorOpen={sidesSelectorOpen}
+                        onSidesSelectorChange={setSidesSelectorOpen}
+                        contextOpen={contextOpen}
+                        setContextOpen={setContextOpen}
+                        dealContext={dealContext}
+                        setDealContext={setDealContext}
+                        contextState={contextState}
+                        definitionsOpen={definitionsOpen}
+                        setDefinitionsOpen={setDefinitionsOpen}
+                        definedTerms={definedTerms}
+                        onNegotiateOpen={openNegotiate}
+                        negotiateHasHistory={negotiateState.messages.length > 0}
+                        mindMapOpen={mindMapOpen}
+                        setMindMapOpen={setMindMapOpen}
+                        mindMapTopicCount={mindMapTopics.length}
+                        riskTolerance={riskTolerance}
+                        riskPanelOpen={riskPanelOpen}
+                        onRiskPanelOpen={() => setRiskPanelOpen(true)}
+                    />
+
+                    {/* Chat Icons - right side of toolbar */}
+                    <div className="app-header__icons">
+                        <button
+                            className="app-header__icon-btn"
+                            onClick={handleNewChat}
+                            title="New Chat"
+                        >
+                            +
+                        </button>
+                        <button
+                            className={`app-header__icon-btn ${chatHistoryOpen ? 'app-header__icon-btn--active' : ''}`}
+                            onClick={() => setChatHistoryOpen(!chatHistoryOpen)}
+                            title="Chat History"
+                        >
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                <circle cx="12" cy="12" r="10" />
+                                <polyline points="12 6 12 12 16 14" />
+                            </svg>
+                        </button>
+                    </div>
+                </div>
             </header>
 
             <FocusIndicator />
@@ -405,6 +484,8 @@ function AppContent() {
                 apiKey={apiKey}
                 dealContext={contextState}
                 detectedParties={detectedParties}
+                riskTolerance={riskTolerance}
+                selectedSide={selectedSide}
             />
             <MindMap
                 isOpen={mindMapOpen}
@@ -438,6 +519,16 @@ function AppContent() {
                 onClose={() => setDefinitionsOpen(false)}
                 terms={definedTerms}
             />
+            <ChatHistoryPanel
+                isOpen={chatHistoryOpen}
+                onClose={() => setChatHistoryOpen(false)}
+                currentChatId={currentChatId}
+                chats={chats}
+                onSelectChat={handleSwitchChat}
+                onNewChat={handleNewChat}
+                onDeleteChat={deleteChat}
+                onClearAll={handleClearAllChats}
+            />
         </div>
     );
 }
@@ -445,11 +536,13 @@ function AppContent() {
 export function App() {
     return (
         <SettingsProvider>
-            <DocumentProvider>
-                <ChatProvider>
-                    <AppContent />
-                </ChatProvider>
-            </DocumentProvider>
+            <ChatHistoryProvider>
+                <DocumentProvider>
+                    <ChatProvider>
+                        <AppContent />
+                    </ChatProvider>
+                </DocumentProvider>
+            </ChatHistoryProvider>
         </SettingsProvider>
     );
 }

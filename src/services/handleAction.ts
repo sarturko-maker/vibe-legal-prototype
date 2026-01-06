@@ -759,27 +759,8 @@ async function applyTextChanges(
 
                 console.log(`[applyTextChanges] ✓ Delete applied successfully`);
                 successCount++;
-
-            } else if (change.type === 'replace') {
-                // STANDARD SEARCH/REPLACE
-                console.log(`[applyTextChanges] → Replace: "${change.find.substring(0, 30)}..." → "${change.replace.substring(0, 30)}..."`);
-
-                let searchResults = paragraph.search(change.find, { matchCase: false });
-                searchResults.load('items');
-                await context.sync();
-
-                if (searchResults.items.length === 0) {
-                    console.warn(`[applyTextChanges] Find text not found: "${change.find.substring(0, 50)}"`);
-                    failedCount++;
-                    continue;
-                }
-
-                searchResults.items[0].insertText(change.replace, Word.InsertLocation.replace);
-                await context.sync();
-
-                console.log(`[applyTextChanges] ✓ Replace applied successfully`);
-                successCount++;
             }
+            // Note: REPLACE type removed - all replacements now come through as DELETE_AFTER + INSERT_AFTER pairs
         } catch (error: any) {
             console.error(`[applyTextChanges] Error applying change ${i}:`, error?.message || error);
             failedCount++;
@@ -935,9 +916,7 @@ async function handleAmendOperation(
 
         console.log('[handleAmendOperation] Step 6 DONE: Found', textChangeList.length, 'changes');
         textChangeList.forEach((c, i) => {
-            if (c.type === 'replace') {
-                console.log(`[handleAmendOperation]   [${i}] REPLACE: "${c.find.substring(0, 40)}..." → "${c.replace.substring(0, 40)}..."`);
-            } else if (c.type === 'insert_after') {
+            if (c.type === 'insert_after') {
                 console.log(`[handleAmendOperation]   [${i}] INSERT_AFTER: anchor="${c.anchor.substring(0, 40)}" text="${c.text}"`);
             } else if (c.type === 'delete_after') {
                 console.log(`[handleAmendOperation]   [${i}] DELETE_AFTER: anchor="${c.anchor.substring(0, 40)}" delete="${c.textToDelete.substring(0, 30)}..."`);

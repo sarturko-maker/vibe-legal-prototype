@@ -1,18 +1,23 @@
 /**
  * NegotiateSetup Component
  * Setup screen for position input and mode selection
+ * Requires side selection first (like Risk panel)
  */
 
 import React, { useState } from 'react';
 
 interface NegotiateSetupProps {
-    onStartAutoDebate: (position: string) => void;
+    onStartAutoDebate: (position: string, userSide: 'for' | 'against') => void;
     onStartInteractive: (position: string, userSide: 'for' | 'against') => void;
+    hasSideSelected: boolean;
+    sideName?: string;
 }
 
 export const NegotiateSetup: React.FC<NegotiateSetupProps> = ({
     onStartAutoDebate,
-    onStartInteractive
+    onStartInteractive,
+    hasSideSelected,
+    sideName
 }) => {
     const [position, setPosition] = useState('');
     const [selectedMode, setSelectedMode] = useState<'auto' | 'interactive' | null>(null);
@@ -24,23 +29,51 @@ export const NegotiateSetup: React.FC<NegotiateSetupProps> = ({
         if (!canStart) return;
 
         if (selectedMode === 'auto') {
-            onStartAutoDebate(position.trim());
+            onStartAutoDebate(position.trim(), 'for');
         } else if (selectedMode === 'interactive') {
-            onStartInteractive(position.trim(), userSide);
+            onStartInteractive(position.trim(), 'for');
         }
     };
 
+    // If no side selected in main toolbar, show prompt
+    if (!hasSideSelected) {
+        return (
+            <div className="modal__content modal__content--padded">
+                <div className="modal__section" style={{ textAlign: 'center', padding: '32px 16px' }}>
+                    <p style={{ fontSize: '14px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
+                        ⚠️ Please select a side first
+                    </p>
+                    <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                        Use the <strong>Side</strong> button in the toolbar to choose which party you represent
+                    </p>
+                </div>
+            </div>
+        );
+    }
+
     return (
         <div className="modal__content modal__content--padded">
+            <div style={{
+                background: 'var(--bg-secondary)',
+                padding: '8px 12px',
+                borderRadius: '4px',
+                marginBottom: '16px',
+                fontSize: '12px',
+                color: 'var(--text-secondary)',
+                borderLeft: '3px solid var(--accent-color)'
+            }}>
+                Negotiating as: <strong>{sideName || 'Selected Side'}</strong>
+            </div>
+
             {/* Position Input */}
             <div className="modal__section">
-                <label className="modal__label">Your Position</label>
+                <label className="modal__label">Your Side's Proposal</label>
                 <textarea
                     value={position}
                     onChange={(e) => setPosition(e.target.value)}
-                    placeholder="e.g., The indemnity cap should be 100% of the purchase price..."
+                    placeholder="e.g., The liability cap should be set at 200% of fees paid..."
                     className="modal__textarea"
-                    style={{ height: '112px' }}
+                    style={{ height: '96px' }}
                     maxLength={500}
                 />
             </div>
@@ -64,27 +97,6 @@ export const NegotiateSetup: React.FC<NegotiateSetupProps> = ({
                 </div>
             </div>
 
-            {/* Side Selection (only for interactive mode) */}
-            {selectedMode === 'interactive' && (
-                <div className="modal__section">
-                    <label className="modal__label">Your Side</label>
-                    <div className="modal__toggle-group">
-                        <button
-                            className={`modal__toggle-btn ${userSide === 'for' ? 'modal__toggle-btn--active' : ''}`}
-                            onClick={() => setUserSide('for')}
-                        >
-                            For
-                        </button>
-                        <button
-                            className={`modal__toggle-btn ${userSide === 'against' ? 'modal__toggle-btn--active' : ''}`}
-                            onClick={() => setUserSide('against')}
-                        >
-                            Against
-                        </button>
-                    </div>
-                </div>
-            )}
-
             {/* Start Button */}
             <button
                 className="modal__action-btn"
@@ -98,3 +110,4 @@ export const NegotiateSetup: React.FC<NegotiateSetupProps> = ({
 };
 
 export default NegotiateSetup;
+

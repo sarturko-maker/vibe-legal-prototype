@@ -18,22 +18,107 @@ export interface MinimalChange {
 }
 
 /**
- * Extract last N characters from text, preferring word boundaries.
- * Used to create multi-word anchors for insertions/deletions.
+ * Count occurrences of a substring in text.
  */
-function extractAnchor(text: string, charCount: number): string {
+function countOccurrences(text: string, searchString: string): number {
+    if (!searchString || searchString.length === 0) return 0;
+
+    let count = 0;
+    let position = 0;
+
+    while ((position = text.toLowerCase().indexOf(searchString.toLowerCase(), position)) !== -1) {
+        count++;
+        position += 1; // Move forward to find overlapping matches too
+    }
+
+    return count;
+}
+
+/**
+ * Extract a UNIQUE anchor from text before a given position.
+ * Starts with minimum words and expands until the anchor is unique.
+ * 
+ * CRITICAL: Returns null if no unique anchor can be found!
+ * Caller must handle null and skip the operation.
+ * 
+ * @param fullText - The entire paragraph text (to test uniqueness)
+ * @param textBeforeChange - Text before the change position
+ * @param minWords - Minimum number of words to start with (default 5)
+ * @returns A unique anchor string, or NULL if none found
+ */
+function extractUniqueAnchor(
+    fullText: string,
+    textBeforeChange: string,
+    minWords: number = 5
+): string | null {
+    if (!textBeforeChange || textBeforeChange.length === 0) {
+        // At start of paragraph - return empty string (valid case)
+        return '';
+    }
+
+    // Split into words (preserving content)
+    const words = textBeforeChange.trim().split(/\s+/).filter(w => w.length > 0);
+
+    if (words.length === 0) {
+        return '';
+    }
+
+    // Start with minimum words, expand until unique
+    // Try up to all available words (max 50)
+    const maxWords = Math.min(words.length, 50);
+
+    for (let wordCount = Math.min(minWords, words.length); wordCount <= maxWords; wordCount += 2) {
+        const selectedWords = words.slice(-wordCount);
+        const anchor = selectedWords.join(' ');
+
+        // CRITICAL: Reject anchors that are too short (< 5 chars trimmed)
+        // Single-char anchors like "(" cause corruption in sequential operations
+        const trimmedLength = anchor.replace(/\s/g, '').length;
+        if (trimmedLength < 5) {
+            console.warn(`[ANCHOR DEBUG] Anchor too short (${trimmedLength} chars), expanding...`);
+            continue;  // Try with more words
+        }
+
+        // Test uniqueness
+        const occurrences = countOccurrences(fullText, anchor);
+
+        console.log(`[ANCHOR DEBUG] Testing ${wordCount} words (${trimmedLength} chars): "${anchor.substring(0, 50)}..." = ${occurrences} occurrences`);
+
+        if (occurrences === 1) {
+            console.log(`[ANCHOR DEBUG] ✓ Found unique anchor with ${wordCount} words`);
+            return anchor;
+        }
+    }
+
+    // Could NOT find unique anchor even with all available words!
+    // Return NULL - caller must skip this operation
+    console.error('[ANCHOR ERROR] ✗ Could not find unique anchor!');
+    console.error(`[ANCHOR ERROR] Text before change: "${textBeforeChange.substring(0, 100)}..."`);
+    console.error(`[ANCHOR ERROR] Full paragraph: "${fullText.substring(0, 200)}..."`);
+
+    return null;  // CRITICAL: Return null, not a non-unique fallback!
+}
+
+/**
+ * Legacy extractAnchor - kept for backward compatibility, now calls extractUniqueAnchor
+ * @deprecated Use extractUniqueAnchor instead
+ */
+function extractAnchor(text: string, charCount: number, fullText?: string): string {
+    // If fullText provided, use uniqueness-tested approach
+    if (fullText) {
+        return extractUniqueAnchor(fullText, text);
+    }
+
+    // Fallback to old behavior (just last N chars)
     if (!text || text.length === 0) {
         return '';
     }
 
-    // Take last N chars
     let anchor = text.slice(-charCount).trim();
 
-    // If we cut mid-word, try to find a word boundary
     if (anchor.length > 0 && text.length > charCount) {
         const firstSpace = anchor.indexOf(' ');
         if (firstSpace > 0 && firstSpace < anchor.length - 1) {
-            // Cut off the partial word at the start
             anchor = anchor.substring(firstSpace + 1);
         }
     }
@@ -41,55 +126,32 @@ function extractAnchor(text: string, charCount: number): string {
     return anchor;
 }
 
+// Note: expandReplacementContext function removed - REPLACE type eliminated
+// All replacements are now decomposed into DELETE_AFTER + INSERT_AFTER pairs
+
 /**
- * Expand replacement context to make find/replace strings unique.
- * Uses direct substring extraction to preserve exact spacing.
- * 
- * @param beforeContext - Text that comes BEFORE the change (EQUAL segment)
- * @param afterContext - Text that comes AFTER the change (EQUAL segment)
- * @param findText - Original text being replaced
- * @param replaceText - New text to replace with
- * @returns Expanded find/replace with symmetric context
+ * Ensure proper spacing between anchor and inserted text.
+ * Prevents text from running together like "madeDAP" or "followingthe".
  */
-function expandReplacementContext(
-    beforeContext: string,
-    afterContext: string,
-    findText: string,
-    replaceText: string
-): { find: string; replace: string } {
-    // Use character-based extraction to preserve exact spacing
-    const contextChars = 25;
+function ensureProperSpacing(anchor: string, textToInsert: string): string {
+    // If anchor is empty (start of paragraph), don't add space
+    if (!anchor) return textToInsert;
 
-    // Extract last N chars from before context (preserve spaces!)
-    let leftContext = '';
-    if (beforeContext.length > 0) {
-        leftContext = beforeContext.slice(-contextChars);
-        // Try to start at a word boundary (find first space and cut there)
-        const spaceIdx = leftContext.indexOf(' ');
-        if (spaceIdx > 0 && spaceIdx < leftContext.length - 1) {
-            leftContext = leftContext.substring(spaceIdx); // Keep the space!
-        }
-    }
+    // If anchor ends with whitespace, no space needed
+    const anchorEndsWithSpace = /\s$/.test(anchor);
+    if (anchorEndsWithSpace) return textToInsert;
 
-    // Extract first N chars from after context (preserve spaces!)
-    let rightContext = '';
-    if (afterContext.length > 0) {
-        rightContext = afterContext.slice(0, contextChars);
-        // Try to end at a word boundary (find last space and cut there)
-        const lastSpaceIdx = rightContext.lastIndexOf(' ');
-        if (lastSpaceIdx > 0) {
-            rightContext = rightContext.substring(0, lastSpaceIdx); // Cut at space
-        }
-    }
+    // If text starts with whitespace, no space needed
+    const textStartsWithSpace = /^\s/.test(textToInsert);
+    if (textStartsWithSpace) return textToInsert;
 
-    // Build expanded strings - DON'T TRIM, preserve spacing!
-    const expandedFind = leftContext + findText + rightContext;
-    const expandedReplace = leftContext + replaceText + rightContext;
+    // If text starts with punctuation, no space needed
+    const textStartsWithPunctuation = /^[.,;:!?)}\]'"']/.test(textToInsert);
+    if (textStartsWithPunctuation) return textToInsert;
 
-    console.log(`[textDiff] Expanded replacement: "${findText}" → "${replaceText}"`);
-    console.log(`[textDiff]   With context: "${expandedFind}" → "${expandedReplace}"`);
-
-    return { find: expandedFind, replace: expandedReplace };
+    // Add leading space
+    console.log(`[textDiff] Adding space before insert: "${textToInsert.substring(0, 20)}..."`);
+    return ' ' + textToInsert;
 }
 
 /**
@@ -186,113 +248,249 @@ function cleanupDiffEdges(diffs: Array<[number, string]>): Array<[number, string
 }
 
 /**
- * Convert diffs to TextChange array.
- * Uses insert_after for pure insertions, delete_after for pure deletions,
- * and replace for replacements. This produces cleaner track changes.
+ * Merge adjacent diff operations that are close together.
+ * This converts many micro-operations into fewer phrase-level operations.
+ * 
+ * Rules:
+ * - If two changes are separated by less than maxGapChars of EQUAL text, merge them
+ * - This creates larger, more anchorable chunks
+ * - Prevents issues like "Delete 't'" + "Insert 'f'" becoming separate operations
  */
-function convertDiffsToTextChanges(diffs: Array<[number, string]>): TextChange[] {
+function mergeAdjacentDiffs(diffs: Array<[number, string]>, maxGapChars: number = 20): Array<[number, string]> {
+    if (diffs.length <= 1) return diffs;
+
+    const merged: Array<[number, string]> = [];
+    let pendingDelete = '';
+    let pendingInsert = '';
+    let pendingEqual = '';
+
+    for (let i = 0; i < diffs.length; i++) {
+        const [op, text] = diffs[i];
+
+        if (op === 0) { // EQUAL
+            // If we have pending changes and this EQUAL is short, absorb it
+            if ((pendingDelete || pendingInsert) && text.length <= maxGapChars) {
+                // Check if there's another change coming after this EQUAL
+                const nextOp = i + 1 < diffs.length ? diffs[i + 1][0] : 0;
+                if (nextOp !== 0) {
+                    // More changes coming - absorb this EQUAL into pending
+                    pendingDelete += text;
+                    pendingInsert += text;
+                    continue;
+                }
+            }
+
+            // Flush pending changes before this EQUAL
+            if (pendingDelete || pendingInsert) {
+                if (pendingDelete === pendingInsert) {
+                    // Actually no change - just EQUAL
+                    merged.push([0, pendingDelete]);
+                } else if (pendingDelete && pendingInsert) {
+                    merged.push([-1, pendingDelete]);
+                    merged.push([1, pendingInsert]);
+                } else if (pendingDelete) {
+                    merged.push([-1, pendingDelete]);
+                } else if (pendingInsert) {
+                    merged.push([1, pendingInsert]);
+                }
+                pendingDelete = '';
+                pendingInsert = '';
+            }
+
+            merged.push([0, text]);
+
+        } else if (op === -1) { // DELETE
+            pendingDelete += text;
+
+        } else if (op === 1) { // INSERT
+            pendingInsert += text;
+        }
+    }
+
+    // Flush any remaining pending changes
+    if (pendingDelete || pendingInsert) {
+        if (pendingDelete === pendingInsert) {
+            merged.push([0, pendingDelete]);
+        } else if (pendingDelete && pendingInsert) {
+            merged.push([-1, pendingDelete]);
+            merged.push([1, pendingInsert]);
+        } else if (pendingDelete) {
+            merged.push([-1, pendingDelete]);
+        } else if (pendingInsert) {
+            merged.push([1, pendingInsert]);
+        }
+    }
+
+    console.log(`[textDiff] Merged ${diffs.length} diffs into ${merged.length} diffs`);
+    return merged;
+}
+
+/**
+ * Convert diffs to TextChange array.
+ * Uses insert_after for pure insertions, delete_after for pure deletions.
+ * All replacements are decomposed into DELETE + INSERT pairs.
+ * 
+ * @param diffs - Array of diff tuples from diff_match_patch
+ * @param originalText - Full original text for anchor uniqueness testing
+ */
+/**
+ * Extract a UNIQUE anchor before a specific position in the full text.
+ * Expands word count until uniqueness is achieved or limit reached.
+ * 
+ * @param fullText - The entire text
+ * @param position - The insertion/change position (0-indexed)
+ * @param minWords - Minimum words to start with
+ */
+function extractUniqueAnchorAtPosition(
+    fullText: string,
+    position: number,
+    minWords: number = 5
+): string | null {
+    if (position <= 0) return '';
+    if (position > fullText.length) position = fullText.length;
+
+    const textBefore = fullText.substring(0, position);
+    const words = textBefore.trim().split(/\s+/).filter(w => w.length > 0);
+
+    if (words.length === 0) return '';
+
+    const maxWords = Math.min(words.length, 50);
+
+    // Expand anchor size until unique
+    for (let wordCount = Math.min(minWords, words.length); wordCount <= maxWords; wordCount += 2) {
+        const selectedWords = words.slice(-wordCount);
+        const anchor = selectedWords.join(' ');
+
+        // Reject too short anchors
+        const trimmedLength = anchor.replace(/\s/g, '').length;
+        if (trimmedLength < 5) {
+            // Only warn if we have plenty of words but they are short
+            // If checking "a" and wordCount=1, we should continue
+            if (wordCount < 10) {
+                continue;
+            }
+        }
+
+        const occurrences = countOccurrences(fullText, anchor);
+
+        console.log(`[ANCHOR DEBUG] Testing ${wordCount} words: "${anchor.substring(0, 30)}..." = ${occurrences} occurrences`);
+
+        if (occurrences === 1) {
+            return anchor;
+        }
+    }
+
+    console.error(`[ANCHOR ERROR] Could not find unique anchor ending at pos ${position} inside full text len ${fullText.length}`);
+    return null;
+}
+
+/**
+ * Convert diffs to TextChange array.
+ * Uses insert_after for pure insertions, delete_after for pure deletions.
+ * All replacements are decomposed into DELETE + INSERT pairs.
+ * 
+ * @param diffs - Array of diff tuples from diff_match_patch
+ * @param originalText - Full original text for anchor uniqueness testing
+ */
+function convertDiffsToTextChanges(diffs: Array<[number, string]>, originalText: string): TextChange[] {
     const changes: TextChange[] = [];
+    let currentPos = 0; // Track position in originalText
 
     for (let i = 0; i < diffs.length; i++) {
         const [op, text] = diffs[i];
 
         if (op === 0) {
-            continue; // Skip unchanged text
+            // EQUAL: Advance position
+            currentPos += text.length;
+            continue;
         }
 
         if (op === 1) {
-            // INSERT - check if this is part of a replacement or pure insertion
+            // INSERT
+            // Check context for replacement logic
+            // (If previous op was DELETE, it's a replacement, handled in the DELETE block)
             const prevDiff = i > 0 ? diffs[i - 1] : null;
             const prevPrevDiff = i > 1 ? diffs[i - 2] : null;
-            const prevIsDelete = prevPrevDiff && prevPrevDiff[0] === -1;
 
-            // If previous operation was DELETE (before any EQUAL), this is part of a replacement
-            // The DELETE handler already processed it, so skip
-            if (prevIsDelete && prevDiff && prevDiff[0] === 0) {
-                // This insert follows EQUAL after DELETE - it's a standalone pure insertion
-            } else if (prevPrevDiff && prevPrevDiff[0] === -1) {
-                // Skip - already handled by delete
+            // If this insert immediately follows a DELETE (diffs[i-1] == -1), it was already handled.
+            // BUT: standard dmp output puts DELETE then INSERT. 
+            // My loop handles DELETE case below by looking ahead.
+            // So if we encounter INSERT here, we must check if it was already handled by the PREVIOUS delete.
+
+            if (prevDiff && prevDiff[0] === -1) {
+                // Was handled by DELETE block as replacement
                 continue;
             }
 
-            // PURE INSERTION - use insert_after
-            const beforeText = prevDiff && prevDiff[0] === 0 ? prevDiff[1] : '';
-            const anchor = extractAnchor(beforeText, 40);
+            // PURE INSERTION
+            const anchor = extractUniqueAnchorAtPosition(originalText, currentPos);
 
-            if (!anchor) {
-                console.warn('[textDiff] Pure insertion with no anchor context - using fallback');
-                // Fallback: look for text after insertion
-                const nextDiff = i + 1 < diffs.length ? diffs[i + 1] : null;
-                const afterContext = nextDiff && nextDiff[0] === 0 ? nextDiff[1].slice(0, 20) : '';
-
-                if (afterContext) {
-                    changes.push({
-                        type: 'replace',
-                        find: afterContext,
-                        replace: text + afterContext
-                    });
-                } else {
-                    console.error('[textDiff] Pure insertion with no context at all');
-                }
-            } else {
-                changes.push({
-                    type: 'insert_after',
-                    anchor: anchor,
-                    text: text
-                });
+            if (anchor === null) {
+                console.warn(`[textDiff] SKIPPING INSERT - no unique anchor found at pos ${currentPos}`);
+                continue;
             }
+
+            changes.push({
+                type: 'insert_after',
+                anchor: anchor,
+                text: ensureProperSpacing(anchor, text)
+            });
+            // Position does NOT advance for insertion (it inserts at currentPos)
             continue;
         }
 
         if (op === -1) {
-            // DELETE - check if this is part of a replacement
+            // DELETE
+            // Check if NEXT is INSERT (Replacement)
             const nextDiff = i + 1 < diffs.length ? diffs[i + 1] : null;
 
             if (nextDiff && nextDiff[0] === 1) {
-                // REPLACEMENT - DELETE followed by INSERT
-                // Expand context to make find/replace unique in paragraph
-                const prevDiff = i > 0 ? diffs[i - 1] : null;
-                const afterInsertDiff = i + 2 < diffs.length ? diffs[i + 2] : null;
+                // REPLACEMENT: DELETE + INSERT
+                const anchor = extractUniqueAnchorAtPosition(originalText, currentPos);
+                const oldText = text;
+                const newText = nextDiff[1];
 
-                const beforeContext = prevDiff && prevDiff[0] === 0 ? prevDiff[1] : '';
-                const afterContext = afterInsertDiff && afterInsertDiff[0] === 0 ? afterInsertDiff[1] : '';
+                if (anchor === null) {
+                    console.warn(`[textDiff] SKIPPING REPLACEMENT - no unique anchor found at pos ${currentPos}`);
+                    currentPos += oldText.length; // Skip this text
+                    i++; // Skip next insert
+                    continue;
+                }
 
-                const { find, replace } = expandReplacementContext(
-                    beforeContext,
-                    afterContext,
-                    text,           // Original (being deleted)
-                    nextDiff[1]     // New (being inserted)
-                );
-
+                // Delete old
                 changes.push({
-                    type: 'replace',
-                    find: find,
-                    replace: replace
+                    type: 'delete_after',
+                    anchor: anchor,
+                    textToDelete: oldText
                 });
-                i++; // Skip next since we processed it
+
+                // Insert new (anchored to same spot)
+                changes.push({
+                    type: 'insert_after',
+                    anchor: anchor,
+                    text: ensureProperSpacing(anchor, newText)
+                });
+
+                currentPos += oldText.length;
+                i++; // Consumed next diff
                 continue;
             } else {
-                // PURE DELETION - use delete_after
-                const prevDiff = i > 0 ? diffs[i - 1] : null;
-                const beforeText = prevDiff && prevDiff[0] === 0 ? prevDiff[1] : '';
-                // Use longer anchor (50 chars) to push further back from any nearby insertions
-                const anchor = extractAnchor(beforeText, 50);
+                // PURE DELETE
+                const anchor = extractUniqueAnchorAtPosition(originalText, currentPos);
 
-                if (!anchor) {
-                    console.warn('[textDiff] Pure deletion with no anchor context - using fallback');
-                    // Fallback: use replace with empty string
-                    changes.push({
-                        type: 'replace',
-                        find: text,
-                        replace: ''
-                    });
-                } else {
-                    changes.push({
-                        type: 'delete_after',
-                        anchor: anchor,
-                        textToDelete: text
-                    });
+                if (anchor === null) {
+                    console.warn(`[textDiff] SKIPPING DELETE - no unique anchor found at pos ${currentPos}`);
+                    currentPos += text.length;
+                    continue;
                 }
+
+                changes.push({
+                    type: 'delete_after',
+                    anchor: anchor,
+                    textToDelete: text
+                });
+
+                currentPos += text.length;
             }
         }
     }
@@ -302,15 +500,11 @@ function convertDiffsToTextChanges(diffs: Array<[number, string]>): TextChange[]
 
 /**
  * Convert TextChange array to MinimalChange array for backward compatibility.
+ * Note: REPLACE type removed - only insert_after and delete_after remain
  */
 function textChangesToMinimalChanges(changes: TextChange[]): MinimalChange[] {
     return changes.map(change => {
-        if (change.type === 'replace') {
-            return {
-                find_text: change.find,
-                replace_text: change.replace
-            };
-        } else if (change.type === 'insert_after') {
+        if (change.type === 'insert_after') {
             return {
                 find_text: change.anchor,
                 replace_text: change.anchor + change.text,
@@ -639,20 +833,64 @@ export function findTextChanges(original: string, amended: string): TextChange[]
     }
 
     const dmp = new diff_match_patch();
-    let diffs = dmp.diff_main(normOriginal, normAmended);
+
+    // Use word-level tokenization to prevent character-level micro-operations
+    // This groups changes by word boundaries, making them easier to anchor
+    const wordSplitRegex = /([^\s]+|\s+)/g;
+    const words1 = normOriginal.match(wordSplitRegex) || [];
+    const words2 = normAmended.match(wordSplitRegex) || [];
+
+    // Create a map of words to characters (hashing)
+    const wordToChar = new Map<string, string>();
+    const charToWord: string[] = [];
+    let charCode = 20000; // Start high to avoid control characters
+
+    function getCharForWord(word: string): string {
+        if (!wordToChar.has(word)) {
+            const char = String.fromCharCode(charCode++);
+            wordToChar.set(word, char);
+            charToWord.push(word);
+            return char;
+        }
+        return wordToChar.get(word)!;
+    }
+
+    // Convert word arrays to character strings
+    const chars1 = words1.map(getCharForWord).join('');
+    const chars2 = words2.map(getCharForWord).join('');
+
+    // Perform the diff on the character strings (which represent words)
+    // false = Do not check for semantic cleanup yet, we want exact word matches first
+    const diffsChars = dmp.diff_main(chars1, chars2, false);
+
+    // Convert back from characters to words
+    let diffs: Array<[number, string]> = diffsChars.map((diff: [number, string]) => {
+        const op = diff[0];
+        const text = diff[1].split('').map(char => {
+            const index = char.charCodeAt(0) - 20000;
+            return charToWord[index] || '';
+        }).join('');
+        return [op, text];
+    });
+
+    // Now apply semantic cleanup to merge remaining tiny changes
     dmp.diff_cleanupSemantic(diffs);
     diffs = cleanupDiffEdges(diffs);
 
-    const changes = convertDiffsToTextChanges(diffs);
+    // CRITICAL: Merge adjacent changes separated by small gaps
+    // This reduces 11 micro-operations into 2-3 phrase-level operations
+    diffs = mergeAdjacentDiffs(diffs, 30);  // Merge changes within 30 chars of each other
+
+    console.log(`[textDiff] After word-level diff + merge: ${diffs.length} raw diffs`);
+
+    const changes = convertDiffsToTextChanges(diffs, normOriginal);
 
     console.log(`[textDiff] Found ${changes.length} text changes`);
     changes.forEach((change, idx) => {
-        if (change.type === 'replace') {
-            console.log(`[textDiff]   [${idx}] Replace: "${change.find.substring(0, 30)}..." → "${change.replace.substring(0, 30)}..."`);
-        } else if (change.type === 'insert_after') {
-            console.log(`[textDiff]   [${idx}] Insert "${change.text}" after anchor "${change.anchor}"`);
+        if (change.type === 'insert_after') {
+            console.log(`[textDiff]   [${idx}] INSERT_AFTER: anchor="${change.anchor}" text="${change.text}"`);
         } else if (change.type === 'delete_after') {
-            console.log(`[textDiff]   [${idx}] Delete "${change.textToDelete.substring(0, 30)}..." after anchor "${change.anchor}"`);
+            console.log(`[textDiff]   [${idx}] DELETE_AFTER: anchor="${change.anchor}" delete="${change.textToDelete.substring(0, 30)}..."`);
         }
     });
 

@@ -4,3 +4,5 @@
 export { SettingsProvider, useSettings } from './SettingsContext';
 export { DocumentProvider, useDocument } from './DocumentContext';
 export { ChatProvider, useChat } from './ChatContext';
+export { ChatHistoryProvider, useChatHistory } from './ChatHistoryContext';
+

@@ -19,12 +19,64 @@
     background: var(--bg-primary);
 }
 
+.app-header__top-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--space-3);
+}
+
+.app-header__toolbar-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+}
+
 .app-header__title {
     font-size: var(--text-lg);
     font-weight: var(--font-semibold);
     color: var(--text-primary);
     letter-spacing: -0.02em;
-    margin-bottom: var(--space-4);
+    margin: 0;
+}
+
+/* Header Icons */
+.app-header__icons {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+}
+
+.app-header__icon-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    font-size: 16px;
+    font-weight: 400;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+}
+
+.app-header__icon-btn:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+.app-header__icon-btn--active {
+    background: var(--bg-tertiary);
+    color: var(--blue-600);
+}
+
+.app-header__icon-btn svg {
+    width: 14px;
+    height: 14px;
 }
 
 /* Toolbar */

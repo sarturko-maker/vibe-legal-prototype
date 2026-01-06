@@ -12,6 +12,8 @@ import { NegotiateActions } from './NegotiateActions';
 import { runAutoDebate, generateDebateArgument } from '../services/negotiate';
 import { DealContextState } from '../prompts/systemPrompt';
 import { DetectedParties } from '../services/documentAnalysis';
+import { RiskTolerance } from '../types/state';
+import { SideState } from './SideSelector';
 import './Negotiate.css';
 
 interface NegotiateProps {
@@ -21,6 +23,8 @@ interface NegotiateProps {
     apiKey: string;
     dealContext?: DealContextState | null;
     detectedParties?: DetectedParties | null;
+    riskTolerance?: RiskTolerance | null;
+    selectedSide?: SideState;
     onContinueInMainChat?: (summary: string) => void;
 }
 
@@ -31,18 +35,21 @@ export const Negotiate: React.FC<NegotiateProps> = ({
     apiKey,
     dealContext,
     detectedParties,
+    riskTolerance,
+    selectedSide,
     onContinueInMainChat
 }) => {
     const stopRef = useRef(false);
 
     if (!state.isOpen) return null;
 
-    const handleStartAutoDebate = async (position: string) => {
+    const handleStartAutoDebate = async (position: string, userSide: 'for' | 'against') => {
         stopRef.current = false;
 
         onStateChange({
             mode: 'auto',
             position,
+            userSide,
             messages: [],
             isGenerating: true
         });
@@ -50,7 +57,10 @@ export const Negotiate: React.FC<NegotiateProps> = ({
         const ctx = {
             position,
             dealContext,
-            detectedParties
+            detectedParties,
+            riskTolerance,
+            userSide,
+            selectedSide
         };
 
         await runAutoDebate(
@@ -74,15 +84,50 @@ export const Negotiate: React.FC<NegotiateProps> = ({
         onStateChange({ isGenerating: false });
     };
 
-    const handleStartInteractive = (position: string, userSide: 'for' | 'against') => {
+    const handleStartInteractive = async (position: string, userSide: 'for' | 'against') => {
         onStateChange({
             mode: 'interactive',
             position,
             userSide,
             messages: [],
-            isGenerating: false
+            isGenerating: true
         });
-        console.log('[Negotiate] Starting interactive:', position, 'as', userSide);
+
+        // Auto-start: AI immediately pushes back on the proposal (Opponent)
+        try {
+            const ctx = {
+                position,
+                dealContext,
+                detectedParties,
+                riskTolerance,
+                userSide,
+                selectedSide
+            };
+
+            const result = await generateDebateArgument(
+                apiKey,
+                ctx,
+                [],
+                'against'
+            );
+
+            const aiMsg: DebateMessage = {
+                id: 1,
+                side: 'against',
+                author: 'ai',
+                headline: result.headline,
+                explanation: result.explanation,
+                timestamp: new Date()
+            };
+
+            onStateChange({
+                messages: [aiMsg],
+                isGenerating: false
+            });
+        } catch (error) {
+            console.error('[handleStartInteractive] Error:', error);
+            onStateChange({ isGenerating: false });
+        }
     };
 
     const handleUserArgument = async (text: string) => {
@@ -108,7 +153,10 @@ export const Negotiate: React.FC<NegotiateProps> = ({
             const ctx = {
                 position: state.position,
                 dealContext,
-                detectedParties
+                detectedParties,
+                riskTolerance,
+                userSide: state.userSide!,
+                selectedSide
             };
 
             const result = await generateDebateArgument(
@@ -146,7 +194,10 @@ export const Negotiate: React.FC<NegotiateProps> = ({
             const ctx = {
                 position: state.position,
                 dealContext,
-                detectedParties
+                detectedParties,
+                riskTolerance,
+                userSide: state.userSide!,
+                selectedSide
             };
 
             const result = await generateDebateArgument(
@@ -187,6 +238,10 @@ export const Negotiate: React.FC<NegotiateProps> = ({
         });
     };
 
+    const sideName = selectedSide?.selected === 'partyA'
+        ? detectedParties?.partyA?.shortName
+        : (selectedSide?.selected === 'partyB' ? detectedParties?.partyB?.shortName : undefined);
+
     return (
         <div className="modal">
             <header className="modal__header">
@@ -209,6 +264,8 @@ export const Negotiate: React.FC<NegotiateProps> = ({
                 <NegotiateSetup
                     onStartAutoDebate={handleStartAutoDebate}
                     onStartInteractive={handleStartInteractive}
+                    hasSideSelected={selectedSide?.selected !== 'neutral'}
+                    sideName={sideName}
                 />
             )}
 

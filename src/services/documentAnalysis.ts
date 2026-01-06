@@ -7,7 +7,7 @@ import { callGeminiApi } from './gemini/client';
 
 export interface DefinedTerm {
     term: string;
-    definition: string;  // First 150 chars
+    definition: string;  // First 400 chars
 }
 
 export interface DetectedParties {
@@ -113,7 +113,7 @@ Return JSON only, no markdown code blocks, no explanation:
 RULES:
 - shortName: max 15 characters, use abbreviated company name or role
 - definitions: return up to 50 terms, sorted alphabetically
-- definition text: max 150 characters each
+- definition text: max 400 characters each
 - Return EXACTLY 5 mind map topics
 - Each topic has 2-5 sub-topics
 - Mind map summaries must be specific to THIS contract

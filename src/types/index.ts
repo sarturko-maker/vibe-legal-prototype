@@ -5,3 +5,5 @@ export * from './operations';
 export * from './document';
 export * from './formatting';
 export * from './state';
+export * from './chatHistory';
+

@@ -90,12 +90,8 @@ export interface ExecutionResult {
 }
 
 // Text change types for diff application
+// Note: REPLACE type removed - replacements are now decomposed into DELETE_AFTER + INSERT_AFTER pairs
 export type TextChange =
-    | {
-        type: 'replace';
-        find: string;
-        replace: string;
-    }
     | {
         type: 'insert_after';
         anchor: string;        // Multi-word phrase to search for

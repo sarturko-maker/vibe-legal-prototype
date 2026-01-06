@@ -180,3 +180,40 @@
     color: var(--text-muted);
     font-size: var(--text-sm);
 }
+
+/* Expandable definitions */
+.definitions__item--expandable {
+    cursor: pointer;
+    transition: background-color var(--transition-fast);
+}
+
+.definitions__item--expandable:hover {
+    background-color: var(--bg-secondary);
+    border-radius: var(--radius-sm);
+    margin: 0 calc(-1 * var(--space-2));
+    padding: 0 var(--space-2);
+}
+
+/* Expanded text - removes line clamp */
+.definitions__text--expanded {
+    display: block;
+    -webkit-line-clamp: unset;
+    line-clamp: unset;
+    overflow: visible;
+}
+
+/* Expand/collapse button */
+.definitions__expand-btn {
+    background: none;
+    border: none;
+    padding: 0;
+    margin-top: 4px;
+    font-size: var(--text-xs);
+    color: var(--blue-600);
+    cursor: pointer;
+    font-weight: var(--font-medium);
+}
+
+.definitions__expand-btn:hover {
+    text-decoration: underline;
+}
