@@ -92,27 +92,22 @@ These features are visible in Preview Mode to show where the project is heading:
 
 ## Getting Started
 
-### What You Need
-- Microsoft 365 account (Word Online)
-- API key from one of the supported providers (Gemini, Groq, or Mistral)
+### The Honest Version
 
-### Installation
+Right now, running this add-in requires some technical setup. You'll need to run a local development server on your computer before the add-in will work in Word.
 
-1. Download the project files from this repository
-2. Open [Word Online](https://www.office.com/launch/word)
-3. Create or open a document
-4. Go to **Insert → Add-ins → Upload My Add-in**
-5. Upload the `manifest.xml` file from the project folder
-6. The add-in appears in your Home tab
+If you're comfortable with that (or know someone who is), you'll need:
+- Node.js installed on your computer
+- A Microsoft 365 account (Word Online)
+- An API key from one of the supported providers (Gemini, Groq, or Mistral)
 
-### Setup
+Clone this repository, run the development server, then sideload the manifest into Word Online.
 
-1. Click the **Settings** icon in the add-in panel
-2. Choose your AI provider
-3. Enter your API key
-4. Save
+### If That Sounds Like Too Much
 
-You're ready to go.
+That's completely fair. This is an open source project — the code and ideas are here for anyone to learn from, adapt, or build upon.
+
+If there's interest, I may host a live version in the future. In the meantime, feel free to reach out if you'd like help getting it running.
 
 ---
 
