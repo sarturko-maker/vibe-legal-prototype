@@ -147,3 +147,100 @@
     opacity: 0.5;
     cursor: not-allowed;
 }
+
+/* Deploy Locally button - purple preview style */
+.settings__deploy-btn {
+    width: 100%;
+    padding: var(--space-3, 12px) var(--space-4, 16px);
+    font-size: var(--text-sm, 14px);
+    font-weight: var(--font-medium, 500);
+    color: #8B83BE;
+    background: var(--bg-primary, white);
+    border: 1px solid #8B83BE;
+    border-radius: var(--radius-md, 8px);
+    cursor: pointer;
+    transition: all var(--transition-fast, 0.15s);
+}
+
+.settings__deploy-btn:hover {
+    background: #f5f4fa;
+    border-color: #7a72ab;
+    color: #7a72ab;
+}
+
+/* Preview Mode section */
+.settings__section--preview {
+    margin-top: var(--space-4, 16px);
+    padding-top: var(--space-4, 16px);
+    border-top: 1px solid var(--border-light, #e4e4e7);
+}
+
+.settings__preview-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: var(--space-3, 12px);
+}
+
+.settings__preview-info {
+    flex: 1;
+}
+
+.settings__preview-desc {
+    font-size: var(--text-xs, 12px);
+    color: var(--text-muted, #a1a1aa);
+    line-height: 1.5;
+    margin-top: var(--space-1, 4px);
+}
+
+/* Purple styling when preview mode is active */
+.settings__section--preview.settings__section--active .settings__label {
+    color: #8B83BE;
+}
+
+.settings__section--preview.settings__section--active .settings__preview-desc {
+    color: #a9a3c9;
+}
+
+.settings__preview-toggle {
+    flex-shrink: 0;
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+}
+
+/* Toggle switch track (reused from InputArea) */
+.toggle-switch__track {
+    width: 36px;
+    height: 20px;
+    background: #e4e4e7;
+    border-radius: 10px;
+    position: relative;
+    transition: background 0.2s;
+}
+
+.toggle-switch__track--active {
+    background: #18181b;
+}
+
+.toggle-switch__thumb {
+    width: 16px;
+    height: 16px;
+    background: white;
+    border-radius: 50%;
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    transition: transform 0.2s;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+/* Toggle switch track - purple for preview mode */
+.toggle-switch__track--preview {
+    background: #8B83BE;
+}
+
+.toggle-switch__track--preview .toggle-switch__thumb {
+    transform: translateX(16px);
+}

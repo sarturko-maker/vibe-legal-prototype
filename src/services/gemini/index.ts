@@ -1,4 +1,4 @@
 // src/services/gemini/index.ts
 // Gemini service exports
 
-export { callGeminiApi, callGeminiRouter, parseRouterResponse } from './client';
+export { callGeminiApi, callGeminiRouter, callAIRouter, parseRouterResponse } from './client';

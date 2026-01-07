@@ -7,15 +7,21 @@ import { ContractMap, FocusedClause, StyleInfo } from './document';
 import { Operation } from './operations';
 
 // Provider types
-export type AIProvider = 'gemini' | 'claude';
+export type AIProvider = 'gemini' | 'claude' | 'groq' | 'mistral';
 
 // Provider configuration
 export interface ProviderConfig {
     provider: AIProvider;
     geminiApiKey: string;
     claudeApiKey: string;
+    groqApiKey: string;
+    mistralApiKey: string;
     geminiModel: string;
     claudeModel: string;
+    groqModelFast: string;
+    groqModelSlow: string;
+    mistralModelFast: string;
+    mistralModelSlow: string;
 }
 
 // Author mode for track changes
@@ -65,8 +71,14 @@ export interface SettingsState {
     provider: AIProvider;
     geminiApiKey: string;
     claudeApiKey: string;
+    groqApiKey: string;
+    mistralApiKey: string;
     geminiModel: string;
     claudeModel: string;
+    groqModelFast: string;
+    groqModelSlow: string;
+    mistralModelFast: string;
+    mistralModelSlow: string;
     authorMode: AuthorMode;
     customAuthor: string;
     detectedAuthor: string | null;

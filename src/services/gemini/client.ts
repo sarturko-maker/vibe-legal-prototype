@@ -1,10 +1,12 @@
 /**
  * Gemini API Client for Vibe Legal
  * Handles API calls to Google Generative AI
+ * Also provides unified routing to Groq when provider is set
  */
 
-import { AIRouterResponse, Operation } from '../../types';
+import { AIRouterResponse, Operation, AIProvider } from '../../types';
 import { logError } from '../../utils/logger';
+import { callGroqApi, buildGroqMessages } from '../groq';
 
 // API endpoint
 const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
@@ -71,6 +73,51 @@ export async function callGeminiRouter(
 ): Promise<AIRouterResponse> {
     const text = await callGeminiApi(apiKey, model, systemPrompt, userPrompt);
     return parseRouterResponse(text);
+}
+
+/**
+ * Unified AI Router - routes to Gemini, Groq, or Mistral based on provider.
+ * This is the main entry point for AI calls that need provider awareness.
+ */
+export async function callAIRouter(
+    provider: AIProvider,
+    apiKey: string,
+    model: string,
+    systemPrompt: string,
+    userPrompt: string
+): Promise<AIRouterResponse> {
+    if (provider === 'groq' || provider === 'mistral') {
+        // Both Groq and Mistral use OpenAI-compatible format
+        const messages = buildGroqMessages(systemPrompt, userPrompt);
+        const { callOpenAICompatibleApi } = await import('../groq');
+        const text = await callOpenAICompatibleApi(provider, apiKey, model, messages);
+        return parseRouterResponse(text);
+    }
+
+    // Default to Gemini (handles 'gemini' and 'claude' for now)
+    return callGeminiRouter(apiKey, model, systemPrompt, userPrompt);
+}
+
+/**
+ * Unified AI call that returns raw text - routes to Gemini, Groq, or Mistral.
+ * Use this for document analysis, party detection, and other non-router calls.
+ */
+export async function callAIForText(
+    provider: AIProvider,
+    apiKey: string,
+    model: string,
+    systemPrompt: string,
+    userPrompt: string
+): Promise<string> {
+    if (provider === 'groq' || provider === 'mistral') {
+        // Both Groq and Mistral use OpenAI-compatible format
+        const messages = buildGroqMessages(systemPrompt, userPrompt);
+        const { callOpenAICompatibleApi } = await import('../groq');
+        return callOpenAICompatibleApi(provider, apiKey, model, messages);
+    }
+
+    // Default to Gemini
+    return callGeminiApi(apiKey, model, systemPrompt, userPrompt);
 }
 
 /**
@@ -156,23 +203,91 @@ function extractJsonFromString(text: string): string | null {
 }
 
 /**
+ * Sanitize JSON string to fix common LLM issues like unescaped newlines in strings.
+ * Replaces literal newlines/tabs inside JSON string values with proper escape sequences.
+ */
+function sanitizeJsonString(text: string): string {
+    // Replace literal newlines inside strings with \n escape
+    // This regex finds content between quotes and escapes newlines/tabs within
+    let result = '';
+    let inString = false;
+    let escaped = false;
+
+    for (let i = 0; i < text.length; i++) {
+        const char = text[i];
+
+        if (escaped) {
+            result += char;
+            escaped = false;
+            continue;
+        }
+
+        if (char === '\\') {
+            result += char;
+            escaped = true;
+            continue;
+        }
+
+        if (char === '"') {
+            inString = !inString;
+            result += char;
+            continue;
+        }
+
+        if (inString) {
+            // Replace control characters with escape sequences
+            if (char === '\n') {
+                result += '\\n';
+            } else if (char === '\r') {
+                result += '\\r';
+            } else if (char === '\t') {
+                result += '\\t';
+            } else {
+                result += char;
+            }
+        } else {
+            result += char;
+        }
+    }
+
+    return result;
+}
+
+/**
  * Parse router response JSON.
  */
 export function parseRouterResponse(text: string): AIRouterResponse {
-    let jsonText = text;
+    let jsonText = text.trim();
+
+    // 0. Handle case where AI returns the JSON as a quoted string literal
+    // Check if text starts with a quote and contains JSON
+    if ((jsonText.startsWith('"') || jsonText.startsWith("'")) && jsonText.includes('"intent"')) {
+        try {
+            // Try to parse as a string literal first
+            const unwrapped = JSON.parse(jsonText);
+            if (typeof unwrapped === 'string') {
+                jsonText = unwrapped;
+            }
+        } catch {
+            // Not a valid string literal, continue with normal parsing
+        }
+    }
 
     // 1. Try to extract from markdown code block
-    const codeBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+    const codeBlockMatch = jsonText.match(/```(?:json)?\s*([\s\S]*?)```/);
     if (codeBlockMatch) {
         jsonText = codeBlockMatch[1].trim();
     } else {
         // 2. If no code block, try to extract raw JSON object
         // This handles cases where AI adds text before/after the JSON
-        const extracted = extractJsonFromString(text);
+        const extracted = extractJsonFromString(jsonText);
         if (extracted) {
             jsonText = extracted;
         }
     }
+
+    // 3. Sanitize JSON to fix unescaped control characters (common with Mistral)
+    jsonText = sanitizeJsonString(jsonText);
 
     try {
         const parsed = JSON.parse(jsonText);

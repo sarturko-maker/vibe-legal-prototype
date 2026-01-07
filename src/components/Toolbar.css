@@ -48,3 +48,12 @@
     border-radius: 10px;
     color: #3f3f46;
 }
+
+/* Preview-only buttons - slightly muted styling */
+.toolbar__btn--preview {
+    color: #a1a1aa;
+}
+
+.toolbar__btn--preview:hover:not(:disabled) {
+    color: #71717a;
+}

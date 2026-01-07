@@ -9,8 +9,8 @@
 
 import { log, logError, logWarn } from '../utils/logger';
 import { buildRouterSystemPrompt, buildSideInstruction, buildDealContextSection, SideState, DetectedParties, DealContextState } from '../prompts/systemPrompt';
-import { callGeminiRouter } from './gemini/client';
-import { ContractMap, ParagraphInfo, Message } from '../types';
+import { callAIRouter } from './gemini/client';
+import { ContractMap, ParagraphInfo, Message, AIProvider } from '../types';
 import { buildSimpleContractMap } from './document/contractMap';
 import { stripFormattingMarkers } from './formatting/markdownParser';
 import { validateAIResponse, ValidationResult, formatValidationError } from './validation';
@@ -85,7 +85,7 @@ export interface StyleInfo {
 
 export interface ActionResult {
     success: boolean;
-    intent: 'ANSWER' | 'MODIFY' | 'HYBRID' | 'ERROR';
+    intent: 'ANSWER' | 'MODIFY' | 'HYBRID' | 'CLARIFY' | 'ERROR';
     answer?: string;
     operationsExecuted?: number;
     error?: string;
@@ -100,6 +100,7 @@ export interface ActionResult {
 
 /**
  * Main entry point - MATCHES LEGACY handleAction PATTERN
+ * @param provider - AI provider to use ('gemini' or 'groq')
  * @param selectedSide - Optional party selection for client-aware advice
  * @param detectedParties - Optional detected parties from document
  * @param chatHistory - Optional recent chat messages for context
@@ -117,7 +118,8 @@ export async function handleAction(
     detectedParties?: DetectedParties | null,
     chatHistory?: Message[] | null,
     dealContext?: DealContextState | null,
-    riskTolerance?: RiskTolerance | null
+    riskTolerance?: RiskTolerance | null,
+    provider: AIProvider = 'gemini'
 ): Promise<ActionResult> {
 
     if (typeof Word === 'undefined') {
@@ -168,22 +170,25 @@ export async function handleAction(
             documentContext.styleMenu // Pass style menu
         );
 
-        const response = await callGeminiRouter(apiKey, model, systemPrompt, message);
+        const response = await callAIRouter(provider, apiKey, model, systemPrompt, message);
 
         console.log('=== AI RESPONSE ===');
         console.log('Intent:', response.intent);
+        console.log('Answer (first 100 chars):', (response.answer || '').substring(0, 100));
+        console.log('Answer starts with JSON?:', response.answer?.trim().startsWith('{'));
         console.log('Operations:', JSON.stringify(response.operations, null, 2));
 
         const intent = response.intent ||
             (response.operations?.length > 0 ? 'MODIFY' : 'ANSWER');
 
         // ═══════════════════════════════════════════════════════════
-        // If ANSWER only, return without document changes
+        // If ANSWER or CLARIFY, return without document changes
+        // CLARIFY = ambiguous request, AI asks user for specifics
         // ═══════════════════════════════════════════════════════════
-        if (intent === 'ANSWER' || !response.operations?.length) {
+        if (intent === 'ANSWER' || intent === 'CLARIFY' || !response.operations?.length) {
             return {
                 success: true,
-                intent: 'ANSWER',
+                intent: intent as 'ANSWER' | 'CLARIFY',
                 answer: response.answer || response.explanation || 'No answer provided.'
             };
         }

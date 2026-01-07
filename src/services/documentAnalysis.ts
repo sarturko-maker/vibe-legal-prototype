@@ -3,7 +3,8 @@
  * Combined extraction of parties AND defined terms in a single AI call
  */
 
-import { callGeminiApi } from './gemini/client';
+import { callAIForText } from './gemini/client';
+import { AIProvider } from '../types';
 
 export interface DefinedTerm {
     term: string;
@@ -42,7 +43,8 @@ export interface DocumentAnalysis {
 export async function analyzeDocument(
     documentText: string,
     apiKey: string,
-    model: string = 'gemini-2.0-flash'
+    model: string = 'gemini-2.0-flash',
+    provider: AIProvider = 'gemini'
 ): Promise<DocumentAnalysis | null> {
     console.log('[analyzeDocument] Starting combined analysis...');
     console.log('[analyzeDocument] API key present:', !!apiKey);
@@ -121,8 +123,8 @@ RULES:
 - Choose appropriate emoji icons for each topic`;
 
     try {
-        console.log('[analyzeDocument] Calling Gemini API with model:', model);
-        const response = await callGeminiApi(apiKey, model, systemPrompt, userPrompt);
+        console.log('[analyzeDocument] Calling AI with provider:', provider, 'model:', model);
+        const response = await callAIForText(provider, apiKey, model, systemPrompt, userPrompt);
         console.log('[analyzeDocument] Raw response length:', response?.length);
 
         // Extract JSON from response (handle potential markdown code blocks)

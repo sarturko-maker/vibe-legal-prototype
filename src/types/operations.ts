@@ -73,7 +73,7 @@ export type Operation =
 
 // AI Response wrapper
 export interface AIRouterResponse {
-    intent?: 'ANSWER' | 'MODIFY' | 'HYBRID';
+    intent?: 'ANSWER' | 'MODIFY' | 'HYBRID' | 'CLARIFY';
     operations: Operation[];
     answer?: string;
     explanation?: string;

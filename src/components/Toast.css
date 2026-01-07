@@ -1,0 +1,32 @@
+/**
+ * Toast Notification Styles
+ * Appears at bottom center, auto-dismisses
+ */
+
+.toast {
+    position: fixed;
+    bottom: 100px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--bg-dark, #18181b);
+    color: var(--text-inverse, white);
+    padding: 10px 20px;
+    border-radius: var(--radius-md, 8px);
+    font-size: var(--text-sm, 14px);
+    font-weight: var(--font-medium, 500);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    animation: toast-in 0.2s ease-out;
+    z-index: 300;
+}
+
+@keyframes toast-in {
+    from {
+        opacity: 0;
+        transform: translateX(-50%) translateY(10px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateX(-50%) translateY(0);
+    }
+}

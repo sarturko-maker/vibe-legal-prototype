@@ -3,7 +3,8 @@
  * Uses AI to identify the two main parties in a contract
  */
 
-import { callGeminiApi } from './gemini/client';
+import { callAIForText } from './gemini/client';
+import { AIProvider } from '../types';
 
 export interface DetectedParties {
     partyA: { shortName: string; fullName: string; role: string };
@@ -16,7 +17,8 @@ export interface DetectedParties {
 export async function detectParties(
     documentText: string,
     apiKey: string,
-    model: string = 'gemini-2.0-flash'
+    model: string = 'gemini-2.0-flash',
+    provider: AIProvider = 'gemini'
 ): Promise<DetectedParties | null> {
     console.log('[detectParties] Starting...');
     console.log('[detectParties] API key present:', !!apiKey);
@@ -59,8 +61,8 @@ Contract text (first 3000 chars):
 ${documentText.substring(0, 3000)}`;
 
     try {
-        console.log('[detectParties] Calling Gemini API with model:', model);
-        const response = await callGeminiApi(apiKey, model, systemPrompt, userPrompt);
+        console.log('[detectParties] Calling AI with provider:', provider, 'model:', model);
+        const response = await callAIForText(provider, apiKey, model, systemPrompt, userPrompt);
         console.log('[detectParties] Raw response length:', response?.length);
         console.log('[detectParties] Raw response:', response?.substring(0, 500));
 

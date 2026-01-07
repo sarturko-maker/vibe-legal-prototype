@@ -1,0 +1,52 @@
+/**
+ * Deploy Locally Modal Styles
+ */
+
+/* Modal sizing */
+.deploy-locally-modal {
+    width: 300px;
+    max-width: 90vw;
+}
+
+/* Introduction text */
+.deploy-locally__intro {
+    font-size: var(--text-base, 15px);
+    color: var(--text-secondary, #52525b);
+    line-height: 1.6;
+    margin-bottom: var(--space-4, 16px);
+}
+
+/* Bullet list */
+.deploy-locally__list {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 var(--space-5, 20px) 0;
+}
+
+.deploy-locally__item {
+    position: relative;
+    padding-left: var(--space-5, 20px);
+    margin-bottom: var(--space-3, 12px);
+    font-size: var(--text-sm, 14px);
+    color: var(--text-secondary, #52525b);
+    line-height: 1.5;
+}
+
+.deploy-locally__item:last-child {
+    margin-bottom: 0;
+}
+
+.deploy-locally__item::before {
+    content: '•';
+    position: absolute;
+    left: var(--space-2, 8px);
+    color: var(--text-tertiary, #71717a);
+}
+
+/* Coming soon footer */
+.deploy-locally__coming-soon {
+    font-size: var(--text-sm, 14px);
+    color: var(--text-muted, #a1a1aa);
+    padding-top: var(--space-3, 12px);
+    border-top: 1px solid var(--border-light, #e4e4e7);
+}

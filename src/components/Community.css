@@ -1,0 +1,79 @@
+/**
+ * Community Panel Styles
+ * Matches Definitions panel styling
+ */
+
+/* Section container */
+.community__section {
+    margin-bottom: var(--space-4, 16px);
+}
+
+.community__section:last-of-type {
+    margin-bottom: 0;
+}
+
+/* Section title - uppercase label */
+.community__section-title {
+    font-size: var(--text-xs, 12px);
+    font-weight: var(--font-medium, 500);
+    color: var(--text-tertiary, #71717a);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: var(--space-3, 12px);
+}
+
+/* List of items */
+.community__list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2, 8px);
+}
+
+/* Clickable item */
+.community__item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: var(--space-3, 12px);
+    background: var(--bg-secondary, #f4f4f5);
+    border: 1px solid var(--border-light, #e4e4e7);
+    border-radius: var(--radius-md, 8px);
+    cursor: pointer;
+    transition: all var(--transition-fast, 0.15s);
+}
+
+.community__item:hover {
+    background: var(--bg-tertiary, #e4e4e7);
+    border-color: var(--neutral-300, #d4d4d8);
+}
+
+/* Item title - bold/medium */
+.community__item-title {
+    font-size: var(--text-base, 15px);
+    font-weight: var(--font-medium, 500);
+    color: var(--text-primary, #18181b);
+    margin-bottom: 2px;
+}
+
+/* Item description - lighter/smaller */
+.community__item-desc {
+    font-size: var(--text-sm, 14px);
+    color: var(--text-tertiary, #71717a);
+    line-height: 1.4;
+}
+
+/* Horizontal divider */
+.community__divider {
+    height: 1px;
+    background: var(--border-light, #e4e4e7);
+    margin: var(--space-4, 16px) 0;
+}
+
+/* Footer muted text */
+.community__footer {
+    font-size: var(--text-sm, 14px);
+    color: var(--text-muted, #a1a1aa);
+    line-height: 1.5;
+    text-align: center;
+    padding: var(--space-3, 12px) 0;
+}

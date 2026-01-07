@@ -8,6 +8,8 @@ import { DealContextState } from '../prompts/systemPrompt';
 import { DetectedParties } from './documentAnalysis';
 import { RiskTolerance } from '../types/state';
 import { SideState } from '../components/SideSelector';
+import { callAIForText } from './gemini/client';
+import { AIProvider } from '../types';
 
 export interface NegotiateContext {
     position: string;
@@ -129,27 +131,17 @@ export async function generateDebateArgument(
     apiKey: string,
     ctx: NegotiateContext,
     history: DebateMessage[],
-    nextSide: 'for' | 'against'
+    nextSide: 'for' | 'against',
+    model: string = 'gemini-2.0-flash',
+    provider: AIProvider = 'gemini'
 ): Promise<{ headline: string; explanation: string }> {
 
     const prompt = buildNegotiatePrompt(ctx, history, nextSide);
 
-    console.log('[generateDebateArgument] Side:', nextSide, 'History:', history.length);
+    console.log('[generateDebateArgument] Side:', nextSide, 'History:', history.length, 'Provider:', provider);
 
-    const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${apiKey}`,
-        {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                contents: [{ parts: [{ text: prompt }] }],
-                generationConfig: { temperature: 0.7 }
-            })
-        }
-    );
-
-    const data = await response.json();
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    const systemPrompt = 'You are a skilled commercial lawyer generating debate arguments. Return valid JSON only.';
+    const text = await callAIForText(provider, apiKey, model, systemPrompt, prompt);
 
     // Parse JSON (strip markdown if present)
     const jsonStr = text.replace(/```json\n?|\n?```/g, '').trim();
@@ -168,7 +160,9 @@ export async function runAutoDebate(
     ctx: NegotiateContext,
     maxRounds: number,
     onMessage: (msg: DebateMessage) => void,
-    shouldStop: () => boolean
+    shouldStop: () => boolean,
+    model: string = 'gemini-2.0-flash',
+    provider: AIProvider = 'gemini'
 ): Promise<void> {
 
     const history: DebateMessage[] = [];
@@ -185,7 +179,7 @@ export async function runAutoDebate(
         }
 
         try {
-            const result = await generateDebateArgument(apiKey, ctx, history, currentSide);
+            const result = await generateDebateArgument(apiKey, ctx, history, currentSide, model, provider);
 
             const msg: DebateMessage = {
                 id: history.length + 1,

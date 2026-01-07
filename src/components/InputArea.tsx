@@ -8,6 +8,7 @@ import React, { useState, useEffect, KeyboardEvent } from 'react';
 import { useChat } from '../state/ChatContext';
 import { useChatHistory } from '../state/ChatHistoryContext';
 import { useSettings } from '../state/SettingsContext';
+import { useToast } from '../state/ToastContext';
 import { handleAction } from '../services/handleAction';
 import { SideState, DetectedParties } from './SideSelector';
 import { DealContextState } from '../prompts/systemPrompt';
@@ -24,11 +25,14 @@ interface InputAreaProps {
     dealContext?: DealContextState | null;
     riskTolerance?: RiskTolerance | null;  // ADR-012
     onOpenSettings?: () => void;  // Callback to open Settings
+    previewMode?: boolean;  // Preview Mode for demo features
 }
 
-export function InputArea({ selectedSide, detectedParties, dealContext, riskTolerance, onOpenSettings }: InputAreaProps) {
+export function InputArea({ selectedSide, detectedParties, dealContext, riskTolerance, onOpenSettings, previewMode }: InputAreaProps) {
     const [input, setInput] = useState('');
     const [previewEnabled, setPreviewEnabled] = useState(false);
+    const [webSearchEnabled, setWebSearchEnabled] = useState(false);
+    const { showToast } = useToast();
     const {
         messages,            // Get chat history for context
         isProcessing,
@@ -44,7 +48,7 @@ export function InputArea({ selectedSide, detectedParties, dealContext, riskTole
         updateCurrentChatTitle,
         currentChat
     } = useChatHistory();
-    const { getCurrentApiKey, getCurrentModel, getAuthorName } = useSettings();
+    const { getCurrentApiKey, getCurrentModel, getAuthorName, provider } = useSettings();
 
     // Auto-generate title when chat reaches 3 messages
     useEffect(() => {
@@ -108,7 +112,8 @@ export function InputArea({ selectedSide, detectedParties, dealContext, riskTole
                 detectedParties,     // Pass detected parties
                 messages,            // Pass chat history for context
                 dealContext,         // Pass deal context
-                riskTolerance        // Pass risk tolerance (ADR-012)
+                riskTolerance,       // Pass risk tolerance (ADR-012)
+                provider             // Pass AI provider
             );
 
             if (result.isDraft && result.preview) {
@@ -168,23 +173,49 @@ export function InputArea({ selectedSide, detectedParties, dealContext, riskTole
             </div>
 
             <div className="input-footer">
-                <button
-                    className="toggle-switch"
-                    onClick={() => setPreviewEnabled(!previewEnabled)}
-                >
-                    <div className={`toggle-switch__track ${previewEnabled ? 'toggle-switch__track--active' : ''}`}>
-                        <div className="toggle-switch__thumb" />
-                    </div>
-                    <span className="toggle-switch__label">Preview changes</span>
-                </button>
+                <div className="input-footer__left">
+                    <button
+                        className="toggle-switch"
+                        onClick={() => setPreviewEnabled(!previewEnabled)}
+                    >
+                        <div className={`toggle-switch__track ${previewEnabled ? 'toggle-switch__track--active' : ''}`}>
+                            <div className="toggle-switch__thumb" />
+                        </div>
+                        <span className="toggle-switch__label">Preview changes</span>
+                    </button>
 
-                <button
-                    className="settings-link"
-                    onClick={onOpenSettings}
-                >
-                    Settings
-                    {!hasApiKey && <span className="settings-link__dot settings-link__dot--warning" />}
-                </button>
+                    {previewMode && (
+                        <button
+                            className="toggle-switch toggle-switch--preview"
+                            onClick={() => {
+                                setWebSearchEnabled(!webSearchEnabled);
+                                showToast('Coming soon');
+                            }}
+                        >
+                            <div className={`toggle-switch__track ${webSearchEnabled ? 'toggle-switch__track--active' : ''}`}>
+                                <div className="toggle-switch__thumb" />
+                            </div>
+                            <span className="toggle-switch__label">Web Search</span>
+                        </button>
+                    )}
+                </div>
+
+                <div className="input-footer__right">
+                    {previewMode && (
+                        <span className="settings-link preview-mode-indicator">
+                            Preview Mode
+                            <span className="settings-link__dot settings-link__dot--preview" />
+                        </span>
+                    )}
+
+                    <button
+                        className="settings-link"
+                        onClick={onOpenSettings}
+                    >
+                        Settings
+                        {!hasApiKey && <span className="settings-link__dot settings-link__dot--warning" />}
+                    </button>
+                </div>
             </div>
         </div>
     );

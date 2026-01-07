@@ -40,6 +40,10 @@ interface ToolbarProps {
     riskTolerance: RiskTolerance;
     riskPanelOpen: boolean;
     onRiskPanelOpen: () => void;
+    // Preview Mode props
+    previewMode?: boolean;
+    communityPanelOpen?: boolean;
+    onCommunityPanelChange?: (open: boolean) => void;
 }
 
 export const Toolbar: React.FC<ToolbarProps> = ({
@@ -64,7 +68,10 @@ export const Toolbar: React.FC<ToolbarProps> = ({
     mindMapTopicCount,
     riskTolerance,
     riskPanelOpen,
-    onRiskPanelOpen
+    onRiskPanelOpen,
+    previewMode,
+    communityPanelOpen,
+    onCommunityPanelChange
 }) => {
     return (
         <div className="toolbar">
@@ -131,6 +138,15 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                 Mind Map
                 {mindMapTopicCount > 0 && !mindMapOpen && <span className="toolbar__btn__dot" />}
             </button>
+
+            {previewMode && (
+                <button
+                    onClick={() => onCommunityPanelChange?.(!communityPanelOpen)}
+                    className={`toolbar__btn toolbar__btn--preview ${communityPanelOpen ? 'toolbar__btn--active' : ''}`}
+                >
+                    Community
+                </button>
+            )}
         </div>
     );
 };

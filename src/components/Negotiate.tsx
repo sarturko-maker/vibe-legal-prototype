@@ -14,6 +14,7 @@ import { DealContextState } from '../prompts/systemPrompt';
 import { DetectedParties } from '../services/documentAnalysis';
 import { RiskTolerance } from '../types/state';
 import { SideState } from './SideSelector';
+import { AIProvider } from '../types';
 import './Negotiate.css';
 
 interface NegotiateProps {
@@ -21,6 +22,8 @@ interface NegotiateProps {
     onClose: () => void;
     onStateChange: (updates: Partial<NegotiateState> | ((prev: NegotiateState) => Partial<NegotiateState>)) => void;
     apiKey: string;
+    model?: string;
+    provider?: AIProvider;
     dealContext?: DealContextState | null;
     detectedParties?: DetectedParties | null;
     riskTolerance?: RiskTolerance | null;
@@ -33,6 +36,8 @@ export const Negotiate: React.FC<NegotiateProps> = ({
     onClose,
     onStateChange,
     apiKey,
+    model = 'gemini-2.0-flash',
+    provider = 'gemini',
     dealContext,
     detectedParties,
     riskTolerance,
@@ -73,7 +78,9 @@ export const Negotiate: React.FC<NegotiateProps> = ({
                     messages: [...(prev.messages || []), msg]
                 }));
             },
-            () => stopRef.current
+            () => stopRef.current,
+            model,
+            provider
         );
 
         onStateChange({ isGenerating: false });
@@ -108,7 +115,9 @@ export const Negotiate: React.FC<NegotiateProps> = ({
                 apiKey,
                 ctx,
                 [],
-                'against'
+                'against',
+                model,
+                provider
             );
 
             const aiMsg: DebateMessage = {
@@ -163,7 +172,9 @@ export const Negotiate: React.FC<NegotiateProps> = ({
                 apiKey,
                 ctx,
                 [...state.messages, userMsg],
-                aiSide
+                aiSide,
+                model,
+                provider
             );
 
             const aiMsg: DebateMessage = {
@@ -204,7 +215,9 @@ export const Negotiate: React.FC<NegotiateProps> = ({
                 apiKey,
                 ctx,
                 state.messages,
-                state.userSide!
+                state.userSide!,
+                model,
+                provider
             );
 
             const aiMsg: DebateMessage = {

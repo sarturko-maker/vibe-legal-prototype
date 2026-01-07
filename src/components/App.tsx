@@ -8,6 +8,7 @@ import { SettingsProvider } from '../state/SettingsContext';
 import { DocumentProvider, useDocument } from '../state/DocumentContext';
 import { ChatProvider, useChat } from '../state/ChatContext';
 import { useSettings } from '../state/SettingsContext';
+import { ToastProvider } from '../state/ToastContext';
 import { Toolbar } from './Toolbar';
 import { FocusIndicator } from './FocusIndicator';
 import { ChatArea } from './ChatArea';
@@ -15,6 +16,7 @@ import { PreviewPanel, generateChangeSummary } from './PreviewPanel';
 import { InputArea } from './InputArea';
 import { Settings } from './Settings';
 import { Definitions } from './Definitions';
+import { Community } from './Community';
 import { executeOperations } from '../services/handleAction';
 import { analyzeDocument, DocumentAnalysis, DetectedParties, DefinedTerm, MindMapTopic } from '../services/documentAnalysis';
 import { SideState } from './SideSelector';
@@ -28,6 +30,7 @@ import { ChatHistoryProvider, useChatHistory } from '../state/ChatHistoryContext
 import { ChatHistoryPanel } from './ChatHistoryPanel';
 import { generateChatTitle } from '../services/chatTitleGeneration';
 import './App.css';
+import '../components/Toast.css';
 
 declare var Word: any;
 
@@ -40,7 +43,7 @@ function AppContent() {
         addMessage,
         setIsProcessing
     } = useChat();
-    const { getAuthorName, getCurrentApiKey, getCurrentModel } = useSettings();
+    const { getAuthorName, getCurrentApiKey, getCurrentModel, provider } = useSettings();
     const { contractMap } = useDocument();
 
     // Track accepted/rejected indices for preview panel
@@ -82,6 +85,17 @@ function AppContent() {
 
     // Chat History state
     const [chatHistoryOpen, setChatHistoryOpen] = useState(false);
+
+    // Preview Mode state (persisted to localStorage)
+    const [previewMode, setPreviewMode] = useState<boolean>(() => {
+        return localStorage.getItem('previewMode') === 'true';
+    });
+    const [communityPanelOpen, setCommunityPanelOpen] = useState(false);
+
+    // Persist preview mode to localStorage
+    useEffect(() => {
+        localStorage.setItem('previewMode', String(previewMode));
+    }, [previewMode]);
     const {
         currentChatId,
         chats,
@@ -195,7 +209,7 @@ function AppContent() {
                 console.log('[App] Starting document analysis...');
                 setPartiesLoading(true);
 
-                const analysis = await analyzeDocument(fullText, newApiKey, model);
+                const analysis = await analyzeDocument(fullText, newApiKey, model, provider);
 
                 if (analysis) {
                     console.log('[App] Analysis complete:', analysis.parties.partyA.shortName, 'vs', analysis.parties.partyB.shortName);
@@ -418,6 +432,9 @@ function AppContent() {
                         riskTolerance={riskTolerance}
                         riskPanelOpen={riskPanelOpen}
                         onRiskPanelOpen={() => setRiskPanelOpen(true)}
+                        previewMode={previewMode}
+                        communityPanelOpen={communityPanelOpen}
+                        onCommunityPanelChange={setCommunityPanelOpen}
                     />
 
                     {/* Chat Icons - right side of toolbar */}
@@ -468,6 +485,7 @@ function AppContent() {
                 dealContext={contextState}
                 riskTolerance={riskTolerance}
                 onOpenSettings={() => setSettingsOpen(true)}
+                previewMode={previewMode}
             />
 
             {/* Legal Disclaimer */}
@@ -482,6 +500,8 @@ function AppContent() {
                 onClose={closeNegotiate}
                 onStateChange={handleNegotiateStateChange}
                 apiKey={apiKey}
+                model={model}
+                provider={provider}
                 dealContext={contextState}
                 detectedParties={detectedParties}
                 riskTolerance={riskTolerance}
@@ -500,6 +520,8 @@ function AppContent() {
                 onSettingsSaved={handleSettingsSaved}
                 isOpen={settingsOpen}
                 onClose={() => setSettingsOpen(false)}
+                previewMode={previewMode}
+                onPreviewModeChange={setPreviewMode}
             />
             <RiskTolerancePanel
                 isOpen={riskPanelOpen}
@@ -519,6 +541,10 @@ function AppContent() {
                 onClose={() => setDefinitionsOpen(false)}
                 terms={definedTerms}
             />
+            <Community
+                isOpen={communityPanelOpen}
+                onClose={() => setCommunityPanelOpen(false)}
+            />
             <ChatHistoryPanel
                 isOpen={chatHistoryOpen}
                 onClose={() => setChatHistoryOpen(false)}
@@ -536,13 +562,15 @@ function AppContent() {
 export function App() {
     return (
         <SettingsProvider>
-            <ChatHistoryProvider>
-                <DocumentProvider>
-                    <ChatProvider>
-                        <AppContent />
-                    </ChatProvider>
-                </DocumentProvider>
-            </ChatHistoryProvider>
+            <ToastProvider>
+                <ChatHistoryProvider>
+                    <DocumentProvider>
+                        <ChatProvider>
+                            <AppContent />
+                        </ChatProvider>
+                    </DocumentProvider>
+                </ChatHistoryProvider>
+            </ToastProvider>
         </SettingsProvider>
     );
 }

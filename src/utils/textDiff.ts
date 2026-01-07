@@ -356,16 +356,23 @@ function extractUniqueAnchorAtPosition(
 
     const maxWords = Math.min(words.length, 50);
 
+    // CLAUSE NUMBER PATTERN: Accept short anchors that look like clause numbers (e.g., "6.2", "10.1.3")
+    // These are typically unique within a paragraph even if short
+    const clausePattern = /^\d+(\.\d+)*$/;
+
     // Expand anchor size until unique
     for (let wordCount = Math.min(minWords, words.length); wordCount <= maxWords; wordCount += 2) {
         const selectedWords = words.slice(-wordCount);
         const anchor = selectedWords.join(' ');
 
-        // Reject too short anchors
+        // Check anchor length requirements
         const trimmedLength = anchor.replace(/\s/g, '').length;
-        if (trimmedLength < 5) {
-            // Only warn if we have plenty of words but they are short
-            // If checking "a" and wordCount=1, we should continue
+
+        // Accept shorter anchors if they contain a clause number pattern
+        const hasClauseNumber = selectedWords.some(w => clausePattern.test(w));
+        const minLength = hasClauseNumber ? 2 : 5;  // Clause numbers can be shorter
+
+        if (trimmedLength < minLength) {
             if (wordCount < 10) {
                 continue;
             }
@@ -378,6 +385,25 @@ function extractUniqueAnchorAtPosition(
         if (occurrences === 1) {
             return anchor;
         }
+    }
+
+    // FALLBACK: For early-paragraph changes (position < 30 chars), 
+    // try using the full textBefore as anchor - it may still be unique for paragraph-local search
+    if (position < 30 && textBefore.trim().length > 0) {
+        const fullAnchor = textBefore.trim();
+        const occurrences = countOccurrences(fullText, fullAnchor);
+
+        console.log(`[ANCHOR DEBUG] Early-paragraph fallback: "${fullAnchor}" = ${occurrences} occurrences`);
+
+        if (occurrences === 1) {
+            console.log(`[ANCHOR DEBUG] ✓ Using early-paragraph anchor: "${fullAnchor}"`);
+            return fullAnchor;
+        }
+
+        // Even if not unique in full text, return it for paragraph-local matching
+        // The Word search API searches within the paragraph, so it may still work
+        console.log(`[ANCHOR DEBUG] ✓ Using early-paragraph anchor (paragraph-local): "${fullAnchor}"`);
+        return fullAnchor;
     }
 
     console.error(`[ANCHOR ERROR] Could not find unique anchor ending at pos ${position} inside full text len ${fullText.length}`);

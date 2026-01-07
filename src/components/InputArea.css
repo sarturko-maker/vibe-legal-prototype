@@ -148,6 +148,10 @@
     animation: pulse-dot 2s infinite;
 }
 
+.settings-link__dot--preview {
+    background: #8B83BE;
+}
+
 @keyframes pulse-dot {
 
     0%,
@@ -158,4 +162,54 @@
     50% {
         opacity: 0.5;
     }
+}
+
+/* Footer layout sections */
+.input-footer__left {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.input-footer__right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+/* Preview Mode indicator */
+.preview-mode-indicator {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: #52525b;
+}
+
+.preview-mode-indicator__dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #22c55e;
+}
+
+/* Preview-only elements - purple styling */
+.toggle-switch--preview .toggle-switch__track {
+    background: #d4d1e8;
+}
+
+.toggle-switch--preview .toggle-switch__track--active {
+    background: #8B83BE;
+}
+
+.toggle-switch--preview .toggle-switch__label {
+    color: #8B83BE;
+}
+
+.toggle-switch--preview:hover .toggle-switch__track {
+    background: #c9c5e0;
+}
+
+.toggle-switch--preview:hover .toggle-switch__label {
+    color: #7a72ab;
 }

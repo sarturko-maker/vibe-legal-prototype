@@ -129,6 +129,16 @@
     border-radius: 50%;
 }
 
+/* Preview-only buttons - purple styling */
+.toolbar__btn--preview {
+    color: #8B83BE;
+}
+
+.toolbar__btn--preview:hover:not(:disabled) {
+    color: #7a72ab;
+    background: #f5f4fa;
+}
+
 /* Focus Banner */
 .focus-banner {
     display: flex;
