@@ -6,7 +6,7 @@
 
 > ⚠️ **Please Read Before Using**
 >
-> This is a **vibe coded** project — built by a lawyer who doesn't know how to code, using AI development tools.
+> This is a **vibe coded** project. Built by a lawyer who doesn't know how to code (and with a help of a community that does), using AI development tools.
 >
 > It exists to generate ideas, spark conversation, and contribute to the open source legal tech community. It is **not** a commercial product. It is **not** production-ready software.
 >
