@@ -124,13 +124,6 @@ This Word add-in is Part 1 of a larger project:
 - **Part 2** — A batch processing tool that redlines entire documents against your playbook (coming soon)
 - **Part 3** — A vision for what legal workflows could look like (coming soon)
 
----
-
-## Contributing
-
-This project is open source under the **GPL-3.0 licence**.
-
-If you modify and distribute this software, you must open-source your changes. If you're interested in building something proprietary using these ideas, get in touch.
 
 ---
 
